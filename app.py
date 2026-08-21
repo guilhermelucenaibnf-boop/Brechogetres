@@ -160,6 +160,15 @@ def page(title,body,nav=True):
 if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}
 function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
+function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
+function setOfflineHistory(h){localStorage.setItem("getres_offline_history",JSON.stringify(h))}
+function saveOfflineHistory(sale,status,serverId,erro){
+  let h=getOfflineHistory();
+  const i=h.findIndex(x=>x.offline_id===sale.offline_id);
+  const item={...sale,local_status:status||sale.local_status||"PENDENTE",server_id:serverId||sale.server_id||null,last_error:erro||sale.last_error||""};
+  if(i>=0)h[i]=item;else h.unshift(item);
+  setOfflineHistory(h.slice(0,100));
+}
 function showNetStatus(){
   const el=document.getElementById("netStatus"); if(!el)return;
   const q=getOfflineQueue();
@@ -186,10 +195,19 @@ async function syncOfflineSales(){
     try{
       const r=await fetch("/sync-offline-sale",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(sale)});
       const d=await r.json();
-      if(!(r.ok && d.ok)){sale.last_error=d.erro||"Falha ao sincronizar";rest.push(sale)}
-    }catch(e){rest.push(sale)}
+      if(r.ok && d.ok){
+        saveOfflineHistory(sale,"SINCRONIZADO",d.id||null,"");
+      }else{
+        sale.last_error=d.erro||"Falha ao sincronizar";rest.push(sale);
+        saveOfflineHistory(sale,"PENDENTE",null,sale.last_error);
+      }
+    }catch(e){
+      rest.push(sale);
+      saveOfflineHistory(sale,"PENDENTE",null,sale.last_error||"");
+    }
   }
   setOfflineQueue(rest);showNetStatus();
+  if(typeof renderPedidosOffline==="function")renderPedidosOffline();
   if(rest.length===0)refreshOfflineCatalog();
 }
 window.addEventListener("online",()=>{showNetStatus();syncOfflineSales()});
@@ -574,9 +592,11 @@ function salvarOffline(){
     itens:d.map(x=>({id:Number(x.id),nome:x.nome,tamanho:x.tamanho||'',preco:Number(x.preco)}))
   };
   let q=getOfflineQueue();q.push(sale);setOfflineQueue(q);
+  saveOfflineHistory(sale,'PENDENTE',null,'');
   localStorage.removeItem('g3cart');
-  alert('Pedido salvo OFFLINE. Ele será sincronizado automaticamente quando a internet voltar.');
-  location='/pedidos';
+  showNetStatus();
+  alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
+  location='/pedidos?offline=1';
 }
 async function fechar(){
   if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
@@ -788,17 +808,30 @@ def pedidos():
 function renderPedidosOffline(){
   const el=document.getElementById('pedidosOffline');if(!el)return;
   const q=getOfflineQueue();
-  if(!q.length){el.innerHTML='';return}
-  el.innerHTML=q.map((p,i)=>{
+  let h=getOfflineHistory();
+  // Recupera pedidos pendentes antigos para o histórico local, caso tenham sido salvos antes desta correção.
+  q.forEach(p=>{if(!h.some(x=>x.offline_id===p.offline_id))h.unshift({...p,local_status:'PENDENTE'})});
+  setOfflineHistory(h.slice(0,100));
+  const pendentes=q.map(p=>({...p,local_status:'PENDENTE'}));
+  const idsPendentes=new Set(pendentes.map(p=>p.offline_id));
+  const sincronizados=h.filter(p=>!idsPendentes.has(p.offline_id) && p.local_status==='SINCRONIZADO').slice(0,5);
+  const lista=[...pendentes,...sincronizados];
+  if(!lista.length){el.innerHTML='';return}
+  el.innerHTML=lista.map((p,i)=>{
     const subtotal=(p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0);
     const total=subtotal+Number(p.taxa_entrega||0);
+    const pendente=p.local_status!=='SINCRONIZADO';
+    const st=pendente?'⏳ AGUARDANDO SINCRONIZAÇÃO':`✅ SINCRONIZADO${p.server_id?' • Venda #'+p.server_id:''}`;
     const erro=p.last_error?`<div class=muted style="color:#ff9b9b">${p.last_error}</div>`:'';
-    return `<div class=box style="border-color:#a87920"><div class=row><div><b>📴 Pedido offline</b><div class=muted>⏳ AGUARDANDO SINCRONIZAÇÃO</div>${erro}</div><b>R$ ${total.toFixed(2)}</b></div><button class=danger style="width:100%;margin-top:12px" onclick="excluirOffline(${i})">🗑️ EXCLUIR PEDIDO OFFLINE</button></div>`;
+    const btn=pendente?`<button class=danger style="width:100%;margin-top:12px" onclick="excluirOffline('${p.offline_id}')">🗑️ EXCLUIR PEDIDO OFFLINE</button>`:'';
+    return `<div class=box style="border-color:${pendente?'#a87920':'#2f8f46'}"><div class=row><div><b>📴 Pedido offline</b><div class=muted>${st}</div>${erro}</div><b>R$ ${total.toFixed(2)}</b></div>${btn}</div>`;
   }).join('');
 }
-function excluirOffline(i){
+function excluirOffline(offlineId){
   if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
-  let q=getOfflineQueue();q.splice(i,1);setOfflineQueue(q);renderPedidosOffline();showNetStatus();
+  let q=getOfflineQueue().filter(x=>x.offline_id!==offlineId);setOfflineQueue(q);
+  let h=getOfflineHistory().filter(x=>x.offline_id!==offlineId);setOfflineHistory(h);
+  renderPedidosOffline();showNetStatus();
 }
 renderPedidosOffline();
 </script>"""
@@ -881,7 +914,7 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-offline-real-v1';
+    js="""const C='brecho-getres-offline-real-v2';
 const CORE=['/','/produtos','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
