@@ -84,9 +84,13 @@ def init():
 CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
 CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
-    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
+    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE vendas ADD COLUMN offline_id TEXT","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
         try: c.execute(sql)
         except sqlite3.OperationalError: pass
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
+    except sqlite3.OperationalError:
+        pass
     for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
         c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
     c.commit(); c.close()
@@ -152,7 +156,46 @@ def page(title,body,nav=True):
         body=f"<div class=voltar-bar><a class=voltar-btn href='{destino}'>← VOLTAR</a></div>"+body
     logo_uri=logo_data_uri()
     logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
-    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
+    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}
+function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
+function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
+function showNetStatus(){
+  const el=document.getElementById("netStatus"); if(!el)return;
+  const q=getOfflineQueue();
+  if(!navigator.onLine){
+    el.style.display="block";el.style.background="#7a1f1f";el.style.color="#fff";
+    el.textContent="OFFLINE • "+q.length+" pedido(s) aguardando sincronização";
+  }else if(q.length){
+    el.style.display="block";el.style.background="#7a5a12";el.style.color="#fff";
+    el.textContent="ONLINE • sincronizando "+q.length+" pedido(s)...";
+  }else{el.style.display="none"}
+}
+async function refreshOfflineCatalog(){
+  if(!navigator.onLine)return;
+  try{
+    const r=await fetch("/offline/catalogo",{cache:"no-store"});
+    if(r.ok)localStorage.setItem("getres_catalogo",JSON.stringify(await r.json()));
+  }catch(e){}
+}
+async function syncOfflineSales(){
+  if(!navigator.onLine)return;
+  let q=getOfflineQueue(); if(!q.length){showNetStatus();return}
+  const rest=[];
+  for(const sale of q){
+    try{
+      const r=await fetch("/sync-offline-sale",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(sale)});
+      const d=await r.json();
+      if(!(r.ok && d.ok)){sale.last_error=d.erro||"Falha ao sincronizar";rest.push(sale)}
+    }catch(e){rest.push(sale)}
+  }
+  setOfflineQueue(rest);showNetStatus();
+  if(rest.length===0)refreshOfflineCatalog();
+}
+window.addEventListener("online",()=>{showNetStatus();syncOfflineSales()});
+window.addEventListener("offline",showNetStatus);
+document.addEventListener("DOMContentLoaded",()=>{showNetStatus();refreshOfflineCatalog();syncOfflineSales()});
+</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
 def home():
@@ -480,30 +523,127 @@ def carrinho():
     C=conf()
     try: taxa=float(str(C.get("taxa_entrega","0")).replace(",","."))
     except: taxa=0
-    return page("Carrinho",f"""<h2>Carrinho</h2>
+    html="""<h2>Carrinho</h2>
 <div id=itens class=box>Carregando...</div>
 <div class=box>
 <label>Como deseja receber?</label>
 <select id=entrega onchange=atualizarTotal()>
 <option value="retirada">Retirada no local — grátis</option>
-<option value="entrega">Entrega — taxa R$ {taxa:.2f}</option>
+<option value="entrega">Entrega — taxa R$ __TAXA__</option>
 </select>
 <div id=taxaInfo class=muted style="margin:8px 0 16px">Retirada no local: sem taxa.</div>
 <label>Pagamento</label>
 <select id=pag><option>PIX</option><option>Dinheiro</option><option>Débito</option><option>Crédito</option></select>
-<button style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
+<button id=btnFinalizar style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
+<div id=offlineInfo class=muted style="margin-top:12px"></div>
 </div>
 <script>
-let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega={taxa:.2f}, subtotal=0;
-fetch('/api-cart?ids='+ids.join(',')).then(x=>x.json()).then(d=>{{window.d=d;subtotal=d.reduce((s,x)=>s+x.preco,0);render(d)}});
-function render(d){{let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
-itens.innerHTML=d.map(x=>`<p>${{x.nome}} <b style="float:right">R$ ${{x.preco.toFixed(2)}}</b></p>`).join('')+
-`<hr><p>Subtotal <b style="float:right">R$ ${{subtotal.toFixed(2)}}</b></p>`+
-(taxa?`<p>Taxa de entrega <b style="float:right">R$ ${{taxa.toFixed(2)}}</b></p>`:'')+
-`<hr><b>Total: R$ ${{total.toFixed(2)}}</b>`}}
-function atualizarTotal(){{taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${{taxaEntrega.toFixed(2)}}`:'Retirada no local: sem taxa.';render(window.d||[])}}
-function fechar(){{if(!ids.length || !window.d || !window.d.length || subtotal<=0){{alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}}fetch('/vender',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0}})}}).then(x=>x.json()).then(x=>{{if(x.ok){{localStorage.removeItem('g3cart');location='/venda/'+x.id}}else alert(x.erro)}})}}
-</script>""")
+let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega=Number('__TAXA__'), subtotal=0;
+function catalogoLocal(){try{return JSON.parse(localStorage.getItem('getres_catalogo')||'[]')}catch(e){return []}}
+function dadosLocais(){
+  const cat=catalogoLocal(), mapa={}; cat.forEach(x=>mapa[x.id]=x);
+  return ids.map(i=>mapa[i]).filter(Boolean);
+}
+async function carregar(){
+  try{
+    const r=await fetch('/api-cart?ids='+ids.join(','),{cache:'no-store'});
+    if(!r.ok)throw new Error();
+    const d=await r.json();window.d=d;subtotal=d.reduce((a,x)=>a+Number(x.preco),0);render(d);
+  }catch(e){
+    const d=dadosLocais();window.d=d;subtotal=d.reduce((a,x)=>a+Number(x.preco),0);render(d);
+    offlineInfo.textContent='Modo offline: usando catálogo salvo neste celular.';
+  }
+}
+function render(d){
+  let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
+  itens.innerHTML=d.map(x=>`<p>${x.nome} <b style="float:right">R$ ${Number(x.preco).toFixed(2)}</b></p>`).join('')+
+  `<hr><p>Subtotal <b style="float:right">R$ ${subtotal.toFixed(2)}</b></p>`+
+  (taxa?`<p>Taxa de entrega <b style="float:right">R$ ${taxa.toFixed(2)}</b></p>`:'')+
+  `<hr><b>Total: R$ ${total.toFixed(2)}</b>`;
+}
+function atualizarTotal(){taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${taxaEntrega.toFixed(2)}`:'Retirada no local: sem taxa.';render(window.d||[])}
+function uuidOffline(){return 'getres-'+Date.now()+'-'+Math.random().toString(16).slice(2)}
+function salvarOffline(){
+  const d=window.d||[]; if(!d.length)return alert('Não há dados do produto salvos para vender offline.');
+  const sale={
+    offline_id:uuidOffline(),
+    criado_em:new Date().toISOString(),
+    pagamento:pag.value,
+    tipo_entrega:entrega.value,
+    taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,
+    itens:d.map(x=>({id:Number(x.id),nome:x.nome,tamanho:x.tamanho||'',preco:Number(x.preco)}))
+  };
+  let q=getOfflineQueue();q.push(sale);setOfflineQueue(q);
+  localStorage.removeItem('g3cart');
+  alert('Pedido salvo OFFLINE. Ele será sincronizado automaticamente quando a internet voltar.');
+  location='/pedidos';
+}
+async function fechar(){
+  if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
+  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0};
+  if(!navigator.onLine){salvarOffline();return}
+  try{
+    const r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const x=await r.json();
+    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id}else alert(x.erro);
+  }catch(e){salvarOffline()}
+}
+carregar();
+</script>"""
+    return page("Carrinho",html.replace("__TAXA__",f"{taxa:.2f}"))
+
+
+@app.route("/offline/catalogo")
+def offline_catalogo():
+    c=db()
+    rows=c.execute("SELECT id,nome,tamanho,preco,estoque FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+@app.route("/sync-offline-sale",methods=["POST"])
+def sync_offline_sale():
+    d=request.get_json() or {}
+    offline_id=str(d.get("offline_id") or "").strip()
+    itens=d.get("itens") or []
+    if not offline_id or not itens:
+        return {"ok":False,"erro":"Pedido offline inválido."},400
+    c=db()
+    existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
+    if existente:
+        vid=existente["id"];c.close()
+        return {"ok":True,"id":vid,"duplicado":True}
+    total=0.0;itens_servidor=[];contagem={}
+    for item in itens:
+        try: pid=int(item.get("id"))
+        except Exception:
+            c.close();return {"ok":False,"erro":"Produto inválido no pedido offline."},400
+        contagem[pid]=contagem.get(pid,0)+1
+    for pid,qtd in contagem.items():
+        r=c.execute("SELECT * FROM produtos WHERE id=? AND COALESCE(ativo,1)=1",(pid,)).fetchone()
+        if not r:
+            c.close();return {"ok":False,"erro":f"Produto {pid} não existe mais."},409
+        if int(r["estoque"] or 0)<qtd:
+            nome=r["nome"];c.close()
+            return {"ok":False,"erro":f"Estoque insuficiente para {nome}."},409
+        for _ in range(qtd):
+            itens_servidor.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":r["preco"]})
+            total+=float(r["preco"] or 0)
+    tipo=d.get("tipo_entrega","retirada")
+    taxa=0.0
+    if tipo=="entrega":
+        try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
+        except Exception: taxa=0.0
+    total+=taxa
+    try:
+        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (d.get("criado_em") or datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),
+                       json.dumps(itens_servidor,ensure_ascii=False),tipo,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id))
+        vid=cur.lastrowid;c.commit()
+    except sqlite3.IntegrityError:
+        r=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
+        vid=r["id"] if r else None
+    c.close()
+    return {"ok":True,"id":vid,"sincronizado":True}
 
 @app.route("/api-cart")
 def api_cart():
@@ -643,7 +783,25 @@ def comprovante(vid):
 @app.route("/pedidos")
 def pedidos():
     c=db();rows=c.execute("SELECT * FROM vendas ORDER BY id DESC").fetchall();c.close()
-    x="<h2>Pedidos</h2>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
+    x="<h2>Pedidos</h2><div id=pedidosOffline></div>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
+    x+="""<script>
+function renderPedidosOffline(){
+  const el=document.getElementById('pedidosOffline');if(!el)return;
+  const q=getOfflineQueue();
+  if(!q.length){el.innerHTML='';return}
+  el.innerHTML=q.map((p,i)=>{
+    const subtotal=(p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0);
+    const total=subtotal+Number(p.taxa_entrega||0);
+    const erro=p.last_error?`<div class=muted style="color:#ff9b9b">${p.last_error}</div>`:'';
+    return `<div class=box style="border-color:#a87920"><div class=row><div><b>📴 Pedido offline</b><div class=muted>⏳ AGUARDANDO SINCRONIZAÇÃO</div>${erro}</div><b>R$ ${total.toFixed(2)}</b></div><button class=danger style="width:100%;margin-top:12px" onclick="excluirOffline(${i})">🗑️ EXCLUIR PEDIDO OFFLINE</button></div>`;
+  }).join('');
+}
+function excluirOffline(i){
+  if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
+  let q=getOfflineQueue();q.splice(i,1);setOfflineQueue(q);renderPedidosOffline();showNetStatus();
+}
+renderPedidosOffline();
+</script>"""
     return page("Pedidos",x)
 
 @app.route("/menu")
@@ -723,9 +881,20 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-final-logo-v5';
-self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/produtos','/carrinho','/pedidos','/estatisticas','/menu','/config']))));
-self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{let x=r.clone();caches.open(C).then(c=>c.put(e.request,x));return r}).catch(()=>caches.match(e.request)))});
+    js="""const C='brecho-getres-offline-real-v1';
+const CORE=['/','/produtos','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
+self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())));
+self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+self.addEventListener('fetch',e=>{
+  if(e.request.method!=='GET')return;
+  e.respondWith(fetch(e.request).then(r=>{
+    const x=r.clone();caches.open(C).then(c=>c.put(e.request,x));return r;
+  }).catch(async()=>{
+    const hit=await caches.match(e.request);if(hit)return hit;
+    if(e.request.mode==='navigate')return (await caches.match('/'))||new Response('Offline',{status:503});
+    return new Response('',{status:503});
+  }));
+});
 """
     resp=Response(js,mimetype="application/javascript")
     resp.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
