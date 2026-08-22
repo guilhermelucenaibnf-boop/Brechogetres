@@ -173,7 +173,7 @@ def page(title,body,nav=True):
     logo_uri=logo_data_uri()
     logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
     return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{})}
 function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
 function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
@@ -1070,3 +1070,91 @@ if __name__=="__main__":
     app.run(host="0.0.0.0",port=5000,debug=False)
 
 # AJUSTE_VISUAL_TEXTO_MAIOR
+
+
+@app.route("/service-worker.js")
+def service_worker():
+    js=r"""
+const CACHE='getres-offline-v9';
+const ROUTES=[
+  '/?menu=1','/destaques','/produtos','/carrinho','/pedidos','/estatisticas','/config','/novo'
+];
+
+self.addEventListener('install',e=>{
+  e.waitUntil(
+    caches.open(CACHE).then(async c=>{
+      for(const u of ROUTES){
+        try{ await c.add(u); }catch(_){}
+      }
+    })
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate',e=>{
+  e.waitUntil(
+    caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch',e=>{
+  const req=e.request;
+  if(req.method!=='GET') return;
+
+  const url=new URL(req.url);
+
+  if(req.mode==='navigate'){
+    e.respondWith((async()=>{
+      try{
+        const fresh=await fetch(req);
+        const c=await caches.open(CACHE);
+        c.put(req,fresh.clone());
+        return fresh;
+      }catch(err){
+        const c=await caches.open(CACHE);
+
+        let hit=await c.match(req,{ignoreSearch:false});
+        if(hit) return hit;
+
+        // Try same route without query string.
+        hit=await c.match(url.pathname,{ignoreSearch:true});
+        if(hit) return hit;
+
+        // Menu fallback must be /?menu=1, never "/" (which shows splash/enter screen).
+        if(url.pathname==='/' || url.pathname===''){
+          hit=await c.match('/?menu=1',{ignoreSearch:false});
+          if(hit) return hit;
+        }
+
+        // For any known app page, try the exact cached route.
+        if(ROUTES.includes(url.pathname)){
+          hit=await c.match(url.pathname,{ignoreSearch:true});
+          if(hit) return hit;
+        }
+
+        // Final safe fallback: menu already past the splash.
+        hit=await c.match('/?menu=1',{ignoreSearch:false});
+        if(hit) return hit;
+
+        return new Response(
+          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
+          {headers:{'Content-Type':'text/html; charset=utf-8'}}
+        );
+      }
+    })());
+    return;
+  }
+
+  e.respondWith(
+    caches.match(req).then(hit=>hit || fetch(req).then(res=>{
+      const copy=res.clone();
+      caches.open(CACHE).then(c=>c.put(req,copy)).catch(()=>{});
+      return res;
+    }).catch(()=>hit))
+  );
+});
+"""
+    from flask import Response
+    return Response(js,mimetype="application/javascript",headers={"Cache-Control":"no-cache, no-store, must-revalidate"})
+
