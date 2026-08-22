@@ -914,19 +914,35 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-offline-real-v2';
-const CORE=['/','/produtos','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
-self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(CORE)).then(()=>self.skipWaiting())));
+    js="""const C='brecho-getres-offline-real-v3';
+const CORE=['/','/?menu=1','/produtos','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
+self.addEventListener('install',e=>e.waitUntil((async()=>{
+  const c=await caches.open(C);
+  for(const url of CORE){
+    try{const r=await fetch(url,{cache:'no-store'});if(r.ok)await c.put(url,r.clone())}catch(err){}
+  }
+  await self.skipWaiting();
+})()));
 self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',e=>{
   if(e.request.method!=='GET')return;
-  e.respondWith(fetch(e.request).then(r=>{
-    const x=r.clone();caches.open(C).then(c=>c.put(e.request,x));return r;
-  }).catch(async()=>{
-    const hit=await caches.match(e.request);if(hit)return hit;
-    if(e.request.mode==='navigate')return (await caches.match('/'))||new Response('Offline',{status:503});
-    return new Response('',{status:503});
-  }));
+  const u=new URL(e.request.url);
+  if(u.origin!==self.location.origin)return;
+  e.respondWith((async()=>{
+    try{
+      const r=await fetch(e.request);
+      if(r && r.ok){const c=await caches.open(C);await c.put(u.pathname+(u.search||''),r.clone())}
+      return r;
+    }catch(err){
+      let hit=await caches.match(e.request,{ignoreSearch:true});
+      if(!hit)hit=await caches.match(u.pathname,{ignoreSearch:true});
+      if(hit)return hit;
+      if(e.request.mode==='navigate'){
+        return (await caches.match('/?menu=1',{ignoreSearch:false})) || (await caches.match('/')) || new Response('Offline',{status:503});
+      }
+      return new Response('',{status:503});
+    }
+  })());
 });
 """
     resp=Response(js,mimetype="application/javascript")
