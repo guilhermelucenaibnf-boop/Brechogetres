@@ -46,7 +46,7 @@ def db():
     if USE_POSTGRES:
         if psycopg2 is None:
             raise RuntimeError("DATABASE_URL configurada, mas psycopg2-binary não está instalado.")
-        raw=psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require"), connect_timeout=8)
+        raw=psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require"))
         return DBConn(raw,True)
     raw=sqlite3.connect(DB)
     raw.row_factory=sqlite3.Row
@@ -795,42 +795,15 @@ function salvarOffline(){
   alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
   location='/pedidos?offline=1';
 }
-let finalizandoVenda=false;
-function tentativaVendaId(){
-  let k=sessionStorage.getItem('getres_venda_tentativa');
-  if(!k){k='online-'+Date.now()+'-'+Math.random().toString(16).slice(2);sessionStorage.setItem('getres_venda_tentativa',k)}
-  return k;
-}
 async function fechar(){
-  if(finalizandoVenda)return;
   if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
+  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0};
   if(!navigator.onLine){salvarOffline();return}
-  finalizandoVenda=true;
-  const btn=document.getElementById('btnFinalizar');
-  if(btn){btn.disabled=true;btn.textContent='PROCESSANDO...'}
-  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,offline_id:tentativaVendaId()};
-  const enviar=async()=>{
-    const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),10000);
-    try{return await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ctl.signal})}
-    finally{clearTimeout(t)}
-  };
   try{
-    let r=await enviar();
-    let x=await r.json();
-    if(x.ok){localStorage.removeItem('g3cart');sessionStorage.removeItem('getres_venda_tentativa');window.location.assign('/venda/'+x.id);return}
-    alert(x.erro||'Não foi possível finalizar a venda.');
-  }catch(e){
-    // A primeira requisição pode ter chegado ao servidor mesmo se a resposta falhou.
-    // Repetimos com o mesmo offline_id; o servidor devolve a mesma venda sem duplicar.
-    try{
-      let r=await enviar();let x=await r.json();
-      if(x.ok){localStorage.removeItem('g3cart');sessionStorage.removeItem('getres_venda_tentativa');window.location.assign('/venda/'+x.id);return}
-    }catch(_){ }
-    alert('A conexão falhou antes de abrir o pedido. Tente novamente quando a internet estabilizar; o sistema não criará pedido duplicado.');
-  }finally{
-    finalizandoVenda=false;
-    if(btn){btn.disabled=false;btn.textContent='FINALIZAR VENDA'}
-  }
+    const r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const x=await r.json();
+    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id}else alert(x.erro);
+  }catch(e){salvarOffline()}
 }
 carregar();
 </script>"""
@@ -923,15 +896,9 @@ def api_cart():
 def vender():
     d=request.get_json() or {}
     ids=d.get("ids",[])
-    offline_id=str(d.get("offline_id") or "").strip()
     if not ids:
         return {"ok":False,"erro":"Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar."},400
-    c=db()
-    if offline_id:
-        existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
-        if existente:
-            vid=existente["id"];c.close();return {"ok":True,"id":vid,"duplicado":True}
-    it=[];total=0
+    c=db();it=[];total=0
     for i in ids:
         r=c.execute("SELECT * FROM produtos WHERE id=?",(i,)).fetchone()
         if not r or r["estoque"]<1:c.close();return {"ok":False,"erro":"Produto sem estoque"}
@@ -945,8 +912,65 @@ def vender():
         try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
         except: taxa=0
     total+=taxa
-    vid=_insert_id(c,"INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id) VALUES(?,?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id or None))
+    vid=_insert_id(c,"INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
     c.commit();c.close();return {"ok":True,"id":vid}
+
+def _pix_tlv(tag, valor):
+    valor=str(valor or "")
+    return f"{tag}{len(valor):02d}{valor}"
+
+def _pix_texto(valor, limite):
+    texto=unicodedata.normalize("NFKD", str(valor or "")).encode("ASCII", "ignore").decode("ASCII")
+    texto=re.sub(r"[^A-Za-z0-9 .,/\-]", "", texto).strip().upper()
+    return (texto or "NAO INFORMADO")[:limite]
+
+def _pix_crc16(texto):
+    crc=0xFFFF
+    for b in texto.encode("utf-8"):
+        crc ^= b << 8
+        for _ in range(8):
+            crc=((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
+    return f"{crc:04X}"
+
+def pix_payload(chave, valor, nome, cidade="RIO DE JANEIRO", txid="***"):
+    chave=str(chave or "").strip()
+    if not chave:
+        return ""
+    try:
+        valor=float(valor or 0)
+    except (TypeError, ValueError):
+        valor=0.0
+    conta=_pix_tlv("00", "BR.GOV.BCB.PIX") + _pix_tlv("01", chave)
+    txid=re.sub(r"[^A-Za-z0-9]", "", str(txid or ""))[:25] or "***"
+    payload=(
+        _pix_tlv("00", "01") +
+        _pix_tlv("26", conta) +
+        _pix_tlv("52", "0000") +
+        _pix_tlv("53", "986") +
+        (_pix_tlv("54", f"{valor:.2f}") if valor > 0 else "") +
+        _pix_tlv("58", "BR") +
+        _pix_tlv("59", _pix_texto(nome, 25)) +
+        _pix_tlv("60", _pix_texto(cidade, 15)) +
+        _pix_tlv("62", _pix_tlv("05", txid)) +
+        "6304"
+    )
+    return payload + _pix_crc16(payload)
+
+def qr_data_uri(texto):
+    if not texto:
+        return ""
+    try:
+        import qrcode
+        qr=qrcode.QRCode(version=None, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=4)
+        qr.add_data(texto)
+        qr.make(fit=True)
+        img=qr.make_image(fill_color="black", back_color="white")
+        buf=io.BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception as e:
+        print("Erro ao gerar QR PIX:", e)
+        return ""
 
 @app.route("/venda/<int:vid>")
 def venda(vid):
@@ -1175,7 +1199,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-v9-carrinho-seguro';
+const CACHE='getres-offline-v10';
 const ROUTES=[
   '/?menu=1',
   '/destaques',
@@ -1219,11 +1243,7 @@ self.addEventListener('fetch',e=>{
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       try{
-        const ctl=new AbortController();
-        const timer=setTimeout(()=>ctl.abort(),8000);
-        let fresh;
-        try{ fresh=await fetch(req,{signal:ctl.signal}); }
-        finally{ clearTimeout(timer); }
+        const fresh=await fetch(req);
         if(fresh && fresh.ok){
           const c=await caches.open(CACHE);
           await c.put(url.pathname+(url.search||''),fresh.clone());
