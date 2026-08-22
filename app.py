@@ -1028,32 +1028,90 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-offline-real-v4';
-const CORE=['/','/?menu=1','/produtos','/novo','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
-self.addEventListener('install',e=>e.waitUntil((async()=>{
-  const c=await caches.open(C);
-  for(const url of CORE){
-    try{const r=await fetch(url,{cache:'no-store'});if(r.ok)await c.put(url,r.clone())}catch(err){}
-  }
-  await self.skipWaiting();
-})()));
-self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
+    js=r"""
+const CACHE='getres-offline-v10';
+const ROUTES=[
+  '/?menu=1',
+  '/destaques',
+  '/produtos',
+  '/novo',
+  '/carrinho',
+  '/pedidos',
+  '/estatisticas',
+  '/config',
+  '/offline/catalogo'
+];
+
+self.addEventListener('install',e=>{
+  e.waitUntil((async()=>{
+    const c=await caches.open(CACHE);
+    for(const u of ROUTES){
+      try{
+        const r=await fetch(u,{cache:'no-store'});
+        if(r.ok) await c.put(u,r.clone());
+      }catch(_){}
+    }
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate',e=>{
+  e.waitUntil(
+    caches.keys()
+      .then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
+      .then(()=>self.clients.claim())
+  );
+});
+
 self.addEventListener('fetch',e=>{
-  if(e.request.method!=='GET')return;
-  const u=new URL(e.request.url);
-  if(u.origin!==self.location.origin)return;
-  e.respondWith((async()=>{
-    try{
-      const r=await fetch(e.request);
-      if(r && r.ok){const c=await caches.open(C);await c.put(u.pathname+(u.search||''),r.clone())}
-      return r;
-    }catch(err){
-      let hit=await caches.match(e.request,{ignoreSearch:true});
-      if(!hit)hit=await caches.match(u.pathname,{ignoreSearch:true});
-      if(hit)return hit;
-      if(e.request.mode==='navigate'){
-        return (await caches.match('/?menu=1',{ignoreSearch:false})) || (await caches.match('/')) || new Response('Offline',{status:503});
+  const req=e.request;
+  if(req.method!=='GET') return;
+
+  const url=new URL(req.url);
+  if(url.origin!==self.location.origin) return;
+
+  if(req.mode==='navigate'){
+    e.respondWith((async()=>{
+      try{
+        const fresh=await fetch(req);
+        if(fresh && fresh.ok){
+          const c=await caches.open(CACHE);
+          await c.put(url.pathname+(url.search||''),fresh.clone());
+        }
+        return fresh;
+      }catch(err){
+        const c=await caches.open(CACHE);
+
+        let hit=await c.match(url.pathname+(url.search||''),{ignoreSearch:false});
+        if(hit) return hit;
+
+        hit=await c.match(url.pathname,{ignoreSearch:true});
+        if(hit) return hit;
+
+        // Nunca cai em "/" puro, pois "/" exibe a tela "Entrar na loja".
+        hit=await c.match('/?menu=1',{ignoreSearch:false});
+        if(hit) return hit;
+
+        return new Response(
+          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
+          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
+        );
       }
+    })());
+    return;
+  }
+
+  e.respondWith((async()=>{
+    const cached=await caches.match(req);
+    if(cached) return cached;
+    try{
+      const fresh=await fetch(req);
+      if(fresh && fresh.ok){
+        const c=await caches.open(CACHE);
+        await c.put(req,fresh.clone());
+      }
+      return fresh;
+    }catch(err){
       return new Response('',{status:503});
     }
   })());
@@ -1068,93 +1126,4 @@ migrar_nome_getres()
 if __name__=="__main__":
     print("BRECHÓ GETRES: http://127.0.0.1:5000")
     app.run(host="0.0.0.0",port=5000,debug=False)
-
-# AJUSTE_VISUAL_TEXTO_MAIOR
-
-
-@app.route("/service-worker.js")
-def service_worker():
-    js=r"""
-const CACHE='getres-offline-v9';
-const ROUTES=[
-  '/?menu=1','/destaques','/produtos','/carrinho','/pedidos','/estatisticas','/config','/novo'
-];
-
-self.addEventListener('install',e=>{
-  e.waitUntil(
-    caches.open(CACHE).then(async c=>{
-      for(const u of ROUTES){
-        try{ await c.add(u); }catch(_){}
-      }
-    })
-  );
-  self.skipWaiting();
-});
-
-self.addEventListener('activate',e=>{
-  e.waitUntil(
-    caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-  );
-  self.clients.claim();
-});
-
-self.addEventListener('fetch',e=>{
-  const req=e.request;
-  if(req.method!=='GET') return;
-
-  const url=new URL(req.url);
-
-  if(req.mode==='navigate'){
-    e.respondWith((async()=>{
-      try{
-        const fresh=await fetch(req);
-        const c=await caches.open(CACHE);
-        c.put(req,fresh.clone());
-        return fresh;
-      }catch(err){
-        const c=await caches.open(CACHE);
-
-        let hit=await c.match(req,{ignoreSearch:false});
-        if(hit) return hit;
-
-        // Try same route without query string.
-        hit=await c.match(url.pathname,{ignoreSearch:true});
-        if(hit) return hit;
-
-        // Menu fallback must be /?menu=1, never "/" (which shows splash/enter screen).
-        if(url.pathname==='/' || url.pathname===''){
-          hit=await c.match('/?menu=1',{ignoreSearch:false});
-          if(hit) return hit;
-        }
-
-        // For any known app page, try the exact cached route.
-        if(ROUTES.includes(url.pathname)){
-          hit=await c.match(url.pathname,{ignoreSearch:true});
-          if(hit) return hit;
-        }
-
-        // Final safe fallback: menu already past the splash.
-        hit=await c.match('/?menu=1',{ignoreSearch:false});
-        if(hit) return hit;
-
-        return new Response(
-          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
-          {headers:{'Content-Type':'text/html; charset=utf-8'}}
-        );
-      }
-    })());
-    return;
-  }
-
-  e.respondWith(
-    caches.match(req).then(hit=>hit || fetch(req).then(res=>{
-      const copy=res.clone();
-      caches.open(CACHE).then(c=>c.put(req,copy)).catch(()=>{});
-      return res;
-    }).catch(()=>hit))
-  );
-});
-"""
-    from flask import Response
-    return Response(js,mimetype="application/javascript",headers={"Cache-Control":"no-cache, no-store, must-revalidate"})
 
