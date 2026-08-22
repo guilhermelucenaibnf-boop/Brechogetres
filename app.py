@@ -268,8 +268,67 @@ def destaques():
     for r in rows:
         foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/static/produtos/"+r["imagem"]+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
         cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
-    if not cards: cards="<div class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
-    return page("Início","<h2>Destaques</h2><div class=grid>"+cards+"</div><br><a class=btn href='/'>← MENU PRINCIPAL</a>")
+    if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
+    offline_js=r"""
+<script>
+(function(){
+  const grid=document.querySelector('.grid');
+  if(!grid)return;
+
+  function getCatalogo(){
+    try{return JSON.parse(localStorage.getItem('getres_catalogo')||'[]')}catch(e){return []}
+  }
+  function getPendentes(){
+    try{return JSON.parse(localStorage.getItem('getres_offline_products')||'[]')}catch(e){return []}
+  }
+  function esc(v){
+    return String(v==null?'':v).replace(/[&<>"']/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function fotoProduto(p){
+    if(p.imagens && p.imagens.length && p.imagens[0]) return p.imagens[0];
+    if(p.imagem){
+      if(String(p.imagem).startsWith('data:') || String(p.imagem).startsWith('/')) return p.imagem;
+      return '/static/produtos/'+p.imagem;
+    }
+    return '';
+  }
+  function card(p,pendente){
+    const foto=fotoProduto(p);
+    const preco=Number(p.preco||0).toFixed(2);
+    const img=foto ? `<img src="${esc(foto)}" alt="Produto">` : `<div class="pic">👕</div>`;
+    const id=Number(p.id||0);
+    const carrinho=id ? `<button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push(${id});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button>` : '';
+    return `<div class="card">${img}<div class="pad"><b>${esc(p.nome||'Blusa')}</b>
+      <div class="muted">${esc(p.tamanho||'')} • ${esc(p.estado||'')} • estoque ${esc(p.estoque||0)}</div>
+      <div class="price">R$ ${preco}</div>${pendente?'<div class="muted">⏳ Aguardando sincronização</div>':carrinho}</div></div>`;
+  }
+
+  const servidorTemProdutos = grid.querySelector('.card');
+  const vazio=document.getElementById('destaquesVazio');
+  const pendentes=getPendentes();
+
+  if(servidorTemProdutos){
+    if(pendentes.length) grid.insertAdjacentHTML('beforeend',pendentes.map(p=>card(p,true)).join(''));
+    return;
+  }
+
+  const catalogo=getCatalogo();
+  const todos=[...pendentes];
+  const vistos=new Set(pendentes.map(p=>String(p.offline_id||p.id||'')));
+  catalogo.forEach(p=>{
+    const k=String(p.offline_id||p.id||'');
+    if(!vistos.has(k)) todos.push(p);
+  });
+
+  if(todos.length){
+    if(vazio)vazio.remove();
+    grid.innerHTML=todos.map(p=>card(p,!!p.offline_id && !p.id)).join('');
+  }
+})();
+</script>"""
+    return page("Início","<h2>Destaques</h2><div class=grid>"+cards+"</div><br><a class=btn href='/'>← MENU PRINCIPAL</a>"+offline_js)
 
 @app.route("/produtos")
 def produtos():
@@ -659,7 +718,7 @@ def sync_offline_product():
 @app.route("/offline/catalogo")
 def offline_catalogo():
     c=db()
-    rows=c.execute("SELECT id,nome,tamanho,preco,estoque FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall()
+    rows=c.execute("SELECT id,nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,offline_id FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall()
     c.close()
     return [dict(r) for r in rows]
 
