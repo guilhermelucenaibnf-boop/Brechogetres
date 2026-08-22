@@ -169,12 +169,20 @@ def migrar_nome_getres():
         c.commit()
     c.close()
 
-def conf():
-    c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close(); return d
+_CONF_CACHE = {"data": None, "at": 0.0}
 
-def logo_data_uri():
+def conf():
+    # Cache curto: evita nova conexão PostgreSQL a cada montagem de página.
+    agora=time.monotonic()
+    if _CONF_CACHE["data"] is not None and agora-_CONF_CACHE["at"] < 15:
+        return dict(_CONF_CACHE["data"])
+    c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close()
+    _CONF_CACHE["data"]=dict(d); _CONF_CACHE["at"]=agora
+    return d
+
+def logo_data_uri(C=None):
     """Retorna a logo cadastrada embutida em base64 para tela e impressão."""
-    C=conf()
+    C=C or conf()
     salvo=str(C.get("logo","") or "").strip()
     if not salvo:
         return ""
@@ -279,10 +287,10 @@ def page(title,body,nav=True):
     if path != "/":
         destino="/?menu=1"
         body=f"<div class=voltar-bar><a class=voltar-btn href='{destino}'>← VOLTAR</a></div>"+body
-    logo_uri=logo_data_uri()
+    logo_uri=logo_data_uri(C)
     logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
     return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{})}
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}
 function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
 function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
@@ -313,11 +321,14 @@ function showNetStatus(){
     el.textContent="ONLINE • sincronizando "+q.length+" pedido(s)...";
   }else{el.style.display="none"}
 }
-async function refreshOfflineCatalog(){
+async function refreshOfflineCatalog(force=false){
   if(!navigator.onLine)return;
+  const agora=Date.now(), ultima=Number(localStorage.getItem("getres_catalogo_at")||0);
+  // Evita baixar todo o catálogo em cada troca de aba.
+  if(!force && agora-ultima < 60000)return;
   try{
-    const r=await fetch("/offline/catalogo",{cache:"no-store"});
-    if(r.ok)localStorage.setItem("getres_catalogo",JSON.stringify(await r.json()));
+    const r=await fetch("/offline/catalogo");
+    if(r.ok){localStorage.setItem("getres_catalogo",JSON.stringify(await r.json()));localStorage.setItem("getres_catalogo_at",String(Date.now()))}
   }catch(e){}
 }
 async function syncOfflineSales(){
@@ -345,7 +356,11 @@ async function syncOfflineSales(){
 }
 window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales()});
 window.addEventListener("offline",showNetStatus);
-document.addEventListener("DOMContentLoaded",()=>{showNetStatus();refreshOfflineCatalog();syncOfflineProducts();syncOfflineSales()});
+document.addEventListener("DOMContentLoaded",()=>{
+  showNetStatus();
+  // Trabalho de sincronização roda depois da página aparecer, sem segurar a navegação.
+  setTimeout(()=>{refreshOfflineCatalog();syncOfflineProducts();syncOfflineSales()},350);
+});
 </script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
@@ -721,7 +736,7 @@ def etiqueta(pid):
     if not p:return "Produto não encontrado",404
     codigo=f"GETRES-{pid:05d}"
     qr=qr_data_uri(codigo); C=conf()
-    logo_uri=logo_data_uri()
+    logo_uri=logo_data_uri(C)
     logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
     return f"""<!doctype html><meta name=viewport content='width=device-width'>
     <style>body{{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}}
@@ -1070,7 +1085,7 @@ def cancelar_pedido(vid):
 def comprovante(vid):
     c=db();v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone();c.close();C=conf()
     itens=json.loads(v["itens"]);linhas="".join(f"<p style='overflow-wrap:anywhere'>{x['nome']} {x['tamanho']}<br>R$ {x['preco']:.2f}</p>" for x in itens)
-    logo_uri=logo_data_uri()
+    logo_uri=logo_data_uri(C)
     logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
     return f"""<!doctype html><meta name=viewport content='width=device-width'><style>body{{width:54mm;margin:auto;font:12px monospace;color:#000;background:#fff;text-align:center}}hr{{border:0;border-top:1px dashed}}button{{width:100%;padding:12px}}.marca{{display:flex;align-items:center;justify-content:center;gap:5px}}@media print{{button{{display:none}}}}</style><div class=marca>{logo}<h2 style="margin:0;font-size:15px;line-height:1;white-space:nowrap">{C['nome']}</h2></div><p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr><p>{'ENTREGA - Taxa R$ %.2f' % v['taxa_entrega'] if v['tipo_entrega']=='entrega' else 'RETIRADA NO LOCAL'}</p><h3>TOTAL R$ {v['total']:.2f}</h3><p>{v['pagamento']}<br>{C['mensagem']}</p><button onclick=print()>IMPRIMIR / RAWBT</button>"""
 
