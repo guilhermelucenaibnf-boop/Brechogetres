@@ -282,7 +282,7 @@ def page(title,body,nav=True):
     logo_uri=logo_data_uri()
     logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
     return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).catch(()=>{})})}
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{})}
 function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
 function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
@@ -795,15 +795,42 @@ function salvarOffline(){
   alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
   location='/pedidos?offline=1';
 }
+let finalizandoVenda=false;
+function tentativaVendaId(){
+  let k=sessionStorage.getItem('getres_venda_tentativa');
+  if(!k){k='online-'+Date.now()+'-'+Math.random().toString(16).slice(2);sessionStorage.setItem('getres_venda_tentativa',k)}
+  return k;
+}
 async function fechar(){
+  if(finalizandoVenda)return;
   if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
-  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0};
   if(!navigator.onLine){salvarOffline();return}
+  finalizandoVenda=true;
+  const btn=document.getElementById('btnFinalizar');
+  if(btn){btn.disabled=true;btn.textContent='PROCESSANDO...'}
+  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,offline_id:tentativaVendaId()};
+  const enviar=async()=>{
+    const ctl=new AbortController();const t=setTimeout(()=>ctl.abort(),10000);
+    try{return await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ctl.signal})}
+    finally{clearTimeout(t)}
+  };
   try{
-    const r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const x=await r.json();
-    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id}else alert(x.erro);
-  }catch(e){salvarOffline()}
+    let r=await enviar();
+    let x=await r.json();
+    if(x.ok){localStorage.removeItem('g3cart');sessionStorage.removeItem('getres_venda_tentativa');window.location.assign('/venda/'+x.id);return}
+    alert(x.erro||'Não foi possível finalizar a venda.');
+  }catch(e){
+    // A primeira requisição pode ter chegado ao servidor mesmo se a resposta falhou.
+    // Repetimos com o mesmo offline_id; o servidor devolve a mesma venda sem duplicar.
+    try{
+      let r=await enviar();let x=await r.json();
+      if(x.ok){localStorage.removeItem('g3cart');sessionStorage.removeItem('getres_venda_tentativa');window.location.assign('/venda/'+x.id);return}
+    }catch(_){ }
+    alert('A conexão falhou antes de abrir o pedido. Tente novamente quando a internet estabilizar; o sistema não criará pedido duplicado.');
+  }finally{
+    finalizandoVenda=false;
+    if(btn){btn.disabled=false;btn.textContent='FINALIZAR VENDA'}
+  }
 }
 carregar();
 </script>"""
@@ -896,9 +923,15 @@ def api_cart():
 def vender():
     d=request.get_json() or {}
     ids=d.get("ids",[])
+    offline_id=str(d.get("offline_id") or "").strip()
     if not ids:
         return {"ok":False,"erro":"Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar."},400
-    c=db();it=[];total=0
+    c=db()
+    if offline_id:
+        existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
+        if existente:
+            vid=existente["id"];c.close();return {"ok":True,"id":vid,"duplicado":True}
+    it=[];total=0
     for i in ids:
         r=c.execute("SELECT * FROM produtos WHERE id=?",(i,)).fetchone()
         if not r or r["estoque"]<1:c.close();return {"ok":False,"erro":"Produto sem estoque"}
@@ -912,7 +945,7 @@ def vender():
         try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
         except: taxa=0
     total+=taxa
-    vid=_insert_id(c,"INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
+    vid=_insert_id(c,"INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id) VALUES(?,?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id or None))
     c.commit();c.close();return {"ok":True,"id":vid}
 
 @app.route("/venda/<int:vid>")
@@ -1142,11 +1175,30 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-offline-v11';
+const CACHE='getres-v9-carrinho-seguro';
+const ROUTES=[
+  '/?menu=1',
+  '/destaques',
+  '/produtos',
+  '/novo',
+  '/carrinho',
+  '/pedidos',
+  '/estatisticas',
+  '/config',
+  '/offline/catalogo'
+];
 
-// Instala imediatamente. Não baixa todas as páginas durante a abertura do app.
 self.addEventListener('install',e=>{
-  e.waitUntil(self.skipWaiting());
+  e.waitUntil((async()=>{
+    const c=await caches.open(CACHE);
+    for(const u of ROUTES){
+      try{
+        const r=await fetch(u,{cache:'no-store'});
+        if(r.ok) await c.put(u,r.clone());
+      }catch(_){}
+    }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate',e=>{
@@ -1160,25 +1212,36 @@ self.addEventListener('activate',e=>{
 self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
+
   const url=new URL(req.url);
   if(url.origin!==self.location.origin) return;
 
-  // Navegação: tenta internet; se falhar, usa somente uma página já visitada.
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       try{
-        const fresh=await fetch(req);
+        const ctl=new AbortController();
+        const timer=setTimeout(()=>ctl.abort(),8000);
+        let fresh;
+        try{ fresh=await fetch(req,{signal:ctl.signal}); }
+        finally{ clearTimeout(timer); }
         if(fresh && fresh.ok){
           const c=await caches.open(CACHE);
-          await c.put(req,fresh.clone());
+          await c.put(url.pathname+(url.search||''),fresh.clone());
         }
         return fresh;
       }catch(err){
         const c=await caches.open(CACHE);
-        let hit=await c.match(req,{ignoreSearch:false});
-        if(!hit) hit=await c.match(url.pathname,{ignoreSearch:true});
-        if(!hit) hit=await c.match('/?menu=1',{ignoreSearch:false});
+
+        let hit=await c.match(url.pathname+(url.search||''),{ignoreSearch:false});
         if(hit) return hit;
+
+        hit=await c.match(url.pathname,{ignoreSearch:true});
+        if(hit) return hit;
+
+        // Nunca cai em "/" puro, pois "/" exibe a tela "Entrar na loja".
+        hit=await c.match('/?menu=1',{ignoreSearch:false});
+        if(hit) return hit;
+
         return new Response(
           '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
           {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
@@ -1188,8 +1251,9 @@ self.addEventListener('fetch',e=>{
     return;
   }
 
-  // Arquivos e APIs GET: rede primeiro para evitar conteúdo antigo preso no cache.
   e.respondWith((async()=>{
+    const cached=await caches.match(req);
+    if(cached) return cached;
     try{
       const fresh=await fetch(req);
       if(fresh && fresh.ok){
@@ -1198,8 +1262,7 @@ self.addEventListener('fetch',e=>{
       }
       return fresh;
     }catch(err){
-      const cached=await caches.match(req);
-      return cached || new Response('',{status:503});
+      return new Response('',{status:503});
     }
   })());
 });
