@@ -234,6 +234,45 @@ def logo_getres():
         return Response(_media_blob_to_bytes(r["conteudo"]),mimetype=r["mime"] or "image/png")
     abort(404)
 
+CSS="""
+*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#000;color:#fff;font-family:Arial,sans-serif}body{font-size:22px}.app{width:100%;max-width:760px;min-height:100dvh;margin:auto;background:#000}header{padding:28px 16px 20px;text-align:center;border-bottom:1px solid #8a6422}.brandline{display:flex;justify-content:center;align-items:center;gap:12px}.brandicon{font-size:42px;color:#e7a92d}.logo{color:#e7a92d;font-size:34px;font-weight:900}.sub{font-size:15px;margin-top:7px;text-transform:uppercase}main{padding:22px 16px 38px}.box{background:linear-gradient(145deg,#171717,#090909);border:1px solid #8a6422;border-radius:22px;padding:20px;margin-bottom:16px}h2{font-size:36px}input,select,textarea{width:100%;padding:15px;margin:6px 0 12px;background:#1b1b1b;color:#fff;border:1px solid #66502a;border-radius:14px;font-size:18px}button,.btn{background:#e7a92d;color:#090909;border:0;border-radius:14px;padding:16px 18px;font-size:19px;font-weight:900;text-decoration:none;display:inline-block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{overflow:hidden;background:#141414;border:1px solid #6e5223;border-radius:19px}.card img,.pic{width:100%;aspect-ratio:1;object-fit:cover}.pic{display:grid;place-items:center;font-size:62px;background:#222}.pad{padding:14px}.price{color:#e9bd50;font-weight:900;font-size:31px;line-height:1.15;margin-top:4px}.muted{color:#f0f0f0;font-size:19px;line-height:1.45;font-weight:600}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.danger{background:#6d1c1c;color:#fff}
+.voltar-bar{margin-bottom:18px}
+.voltar-btn{display:inline-flex;align-items:center;gap:10px;background:#171717;color:#e7a92d;border:1px solid #a87920;border-radius:16px;padding:16px 24px;font-size:22px;font-weight:900;text-decoration:none}
+.foto-editor{margin:16px 0 20px;padding:16px;border:1px solid #8a6422;border-radius:18px;background:#0d0d0d;text-align:center}
+.foto-preview{width:100%;max-height:360px;object-fit:contain;border-radius:15px;background:#181818;display:none;margin-bottom:14px}
+.foto-preview.show{display:block}
+.foto-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.foto-actions label,.foto-actions button{width:100%;margin:0;text-align:center;cursor:pointer}
+.file-hidden{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+.prod-thumb{width:124px;height:124px;object-fit:cover;border-radius:14px;border:1px solid #8a6422;background:#222}
+.prod-info{display:flex;align-items:center;gap:14px;min-width:0}
+.prod-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.prod-actions .btn{font-size:18px;padding:15px 17px}.ver-fotos{width:100%;text-align:center;margin-top:10px}
+.galeria-produto{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.galeria-produto .card img{width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer}
+.foto-grande{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.96);display:none;align-items:center;justify-content:center;padding:18px}
+.foto-grande.aberta{display:flex}
+.foto-grande img{max-width:96vw;max-height:82vh;object-fit:contain;border-radius:14px}
+.foto-fechar{position:absolute;top:18px;right:18px;font-size:24px}
+.foto-nav{position:absolute;top:50%;transform:translateY(-50%);font-size:34px;padding:14px 18px}
+.foto-ant{left:8px}.foto-prox{right:8px}
+.foto-contador{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-weight:bold}
+@media(max-width:480px){.foto-actions{grid-template-columns:1fr}.prod-thumb{width:112px;height:112px}.prod-info{align-items:flex-start}.prod-actions .btn{font-size:17px;padding:14px 15px}.price{font-size:29px}.muted{font-size:18px}h2{font-size:34px}}
+.menu-grid{display:flex;flex-direction:column;gap:14px}.menu-card{min-height:168px;padding:24px 22px;display:flex;align-items:center;gap:22px;color:#fff;text-decoration:none;background:linear-gradient(145deg,#171717,#090909);border:1px solid #a87920;border-radius:22px}.menu-icon{width:104px;flex:0 0 104px;text-align:center;color:#e7a92d;font-size:72px;line-height:1}.menu-copy{flex:1}.menu-title{font-size:34px;font-weight:900;margin-bottom:10px}.menu-desc{font-size:20px;color:#d0d0d0;line-height:1.25}.menu-arrow{font-size:58px;color:#e7a92d;font-weight:900}.menu-badge{background:#e7a92d;color:#090909;border-radius:50%;min-width:52px;height:52px;display:grid;place-items:center;font-size:22px;font-weight:900}.diferenciais{margin-top:32px;padding:30px 12px;border-top:2px solid #8a6422;text-align:center;color:#fff;font-size:31px;font-weight:900;line-height:1.55;letter-spacing:.2px}.diferenciais b{color:#e7a92d;font-size:36px}
+#splash{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .55s}#splash.hide{opacity:0;pointer-events:none}.splash-inner{text-align:center;padding:28px}.splash-mark{font-size:110px;line-height:1;color:#e7a92d;text-shadow:0 0 28px rgba(231,169,45,.4)}.splash-g3{font-size:80px;font-weight:900;color:#e7a92d;line-height:.9;margin-top:-18px}.splash-name{font-size:39px;font-weight:900;color:#e7a92d;margin-top:30px}.splash-sub{font-size:15px;line-height:1.5;margin-top:12px;text-transform:uppercase}.loader{width:42px;height:42px;border:4px solid #3b2c10;border-top-color:#e7a92d;border-radius:50%;margin:55px auto 14px;animation:spin .85s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:480px){.logo{font-size:28px}.brandicon{font-size:34px}.sub{font-size:11px}main{padding:18px 12px 30px}.menu-card{min-height:148px;padding:20px 16px;gap:16px}.menu-icon{width:88px;flex-basis:88px;font-size:62px}.menu-title{font-size:29px}.menu-desc{font-size:17px}.menu-arrow{font-size:48px}.splash-mark{font-size:90px}.splash-g3{font-size:66px}.splash-name{font-size:33px}}
+/* LEITURA GRANDE - BRECHÓ GETRES */
+.prod-info b{font-size:29px!important;line-height:1.2;font-weight:900!important}
+.prod-info .muted{font-size:19px!important;line-height:1.4}
+.prod-info .price{font-size:31px!important}
+.prod-actions .btn{font-size:18px!important;font-weight:900!important}
+@media(max-width:480px){
+  .prod-info b{font-size:27px!important}
+  .prod-info .muted{font-size:18px!important}
+  .prod-info .price{font-size:29px!important}
+  .prod-actions .btn{font-size:17px!important}
+}
+
+"""
+
 def page(title,body,nav=True):
     C=conf()
     path=request.path
