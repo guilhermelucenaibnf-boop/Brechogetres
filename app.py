@@ -46,7 +46,7 @@ def db():
     if USE_POSTGRES:
         if psycopg2 is None:
             raise RuntimeError("DATABASE_URL configurada, mas psycopg2-binary não está instalado.")
-        raw=psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require"))
+        raw=psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require"), connect_timeout=8)
         return DBConn(raw,True)
     raw=sqlite3.connect(DB)
     raw.row_factory=sqlite3.Row
@@ -282,7 +282,7 @@ def page(title,body,nav=True):
     logo_uri=logo_data_uri()
     logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
     return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{})}
+if("serviceWorker" in navigator){window.addEventListener("load",()=>{navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).catch(()=>{})})}
 function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
 function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
@@ -1142,30 +1142,11 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-offline-v10';
-const ROUTES=[
-  '/?menu=1',
-  '/destaques',
-  '/produtos',
-  '/novo',
-  '/carrinho',
-  '/pedidos',
-  '/estatisticas',
-  '/config',
-  '/offline/catalogo'
-];
+const CACHE='getres-offline-v11';
 
+// Instala imediatamente. Não baixa todas as páginas durante a abertura do app.
 self.addEventListener('install',e=>{
-  e.waitUntil((async()=>{
-    const c=await caches.open(CACHE);
-    for(const u of ROUTES){
-      try{
-        const r=await fetch(u,{cache:'no-store'});
-        if(r.ok) await c.put(u,r.clone());
-      }catch(_){}
-    }
-    await self.skipWaiting();
-  })());
+  e.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate',e=>{
@@ -1179,32 +1160,25 @@ self.addEventListener('activate',e=>{
 self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
-
   const url=new URL(req.url);
   if(url.origin!==self.location.origin) return;
 
+  // Navegação: tenta internet; se falhar, usa somente uma página já visitada.
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       try{
         const fresh=await fetch(req);
         if(fresh && fresh.ok){
           const c=await caches.open(CACHE);
-          await c.put(url.pathname+(url.search||''),fresh.clone());
+          await c.put(req,fresh.clone());
         }
         return fresh;
       }catch(err){
         const c=await caches.open(CACHE);
-
-        let hit=await c.match(url.pathname+(url.search||''),{ignoreSearch:false});
+        let hit=await c.match(req,{ignoreSearch:false});
+        if(!hit) hit=await c.match(url.pathname,{ignoreSearch:true});
+        if(!hit) hit=await c.match('/?menu=1',{ignoreSearch:false});
         if(hit) return hit;
-
-        hit=await c.match(url.pathname,{ignoreSearch:true});
-        if(hit) return hit;
-
-        // Nunca cai em "/" puro, pois "/" exibe a tela "Entrar na loja".
-        hit=await c.match('/?menu=1',{ignoreSearch:false});
-        if(hit) return hit;
-
         return new Response(
           '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
           {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
@@ -1214,9 +1188,8 @@ self.addEventListener('fetch',e=>{
     return;
   }
 
+  // Arquivos e APIs GET: rede primeiro para evitar conteúdo antigo preso no cache.
   e.respondWith((async()=>{
-    const cached=await caches.match(req);
-    if(cached) return cached;
     try{
       const fresh=await fetch(req);
       if(fresh && fresh.ok){
@@ -1225,7 +1198,8 @@ self.addEventListener('fetch',e=>{
       }
       return fresh;
     }catch(err){
-      return new Response('',{status:503});
+      const cached=await caches.match(req);
+      return cached || new Response('',{status:503});
     }
   })());
 });
