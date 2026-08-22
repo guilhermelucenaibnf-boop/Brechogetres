@@ -1,114 +1,164 @@
 # BRECHO G3 - instalador de versao inicial
 # Execute: python app.py
-import os, sqlite3, json, secrets, re, unicodedata, io, base64
+import os, sqlite3, json, secrets, re, unicodedata, io, base64, mimetypes
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except Exception:
+    psycopg2=None
+    RealDictCursor=None
 from datetime import datetime
 from urllib.parse import quote_plus
 from flask import Flask, request, redirect, session, render_template_string
 
 app=Flask(__name__)
 app.secret_key=os.environ.get("SECRET_KEY","brecho-g3-2026")
-DB="brechog3.db"
+DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
+USE_POSTGRES=bool(DATABASE_URL)
+DB=os.environ.get("SQLITE_PATH","brechog3.db")
 os.makedirs("static/produtos",exist_ok=True)
 
+class DBCursor:
+    def __init__(self, cur, pg=False): self.cur=cur; self.pg=pg
+    def _sql(self, sql):
+        if not self.pg: return sql
+        return sql.replace("?", "%s")
+    def execute(self, sql, params=()):
+        self.cur.execute(self._sql(sql), params or ())
+        return self
+    def fetchone(self): return self.cur.fetchone()
+    def fetchall(self): return self.cur.fetchall()
+    def __iter__(self): return iter(self.cur)
+    @property
+    def lastrowid(self): return getattr(self.cur,"lastrowid",None)
 
+class DBConn:
+    def __init__(self, raw, pg=False): self.raw=raw; self.pg=pg
+    def execute(self, sql, params=()):
+        cur=self.raw.cursor(cursor_factory=RealDictCursor) if self.pg else self.raw.cursor()
+        return DBCursor(cur,self.pg).execute(sql,params)
+    def commit(self): return self.raw.commit()
+    def rollback(self): return self.raw.rollback()
+    def close(self): return self.raw.close()
 
-def crc16_ccitt(text):
-    crc=0xFFFF
-    for b in text.encode("utf-8"):
-        crc ^= b << 8
-        for _ in range(8):
-            crc=((crc<<1)^0x1021)&0xFFFF if crc&0x8000 else (crc<<1)&0xFFFF
-    return f"{crc:04X}"
-
-def tlv(tag, value):
-    value=str(value)
-    return f"{tag}{len(value.encode('utf-8')):02d}{value}"
-
-def pix_text(value, limit):
-    value=unicodedata.normalize("NFKD", str(value or "")).encode("ASCII","ignore").decode()
-    value=re.sub(r"[^A-Za-z0-9 .-]","",value).strip().upper()
-    return value[:limit] or "BRECHO G3"
-
-def pix_payload(chave, valor, nome="BRECHO G3", cidade="RIO DE JANEIRO", txid="***"):
-    chave=str(chave or "").strip()
-    if not chave: return ""
-    merchant=tlv("00","BR.GOV.BCB.PIX")+tlv("01",chave)
-    payload=(tlv("00","01")+tlv("26",merchant)+tlv("52","0000")+tlv("53","986"))
-    if float(valor)>0: payload+=tlv("54",f"{float(valor):.2f}")
-    payload+=tlv("58","BR")+tlv("59",pix_text(nome,25))+tlv("60",pix_text(cidade,15))
-    payload+=tlv("62",tlv("05",pix_text(txid,25)))+"6304"
-    return payload+crc16_ccitt(payload)
-
-def qr_data_uri(text):
-    try:
-        import qrcode
-        img=qrcode.make(text)
-        b=io.BytesIO(); img.save(b,format="PNG")
-        return "data:image/png;base64,"+base64.b64encode(b.getvalue()).decode()
-    except Exception:
-        return ""
-
-CSS="""
-*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#000;color:#fff;font-family:Arial,sans-serif}body{font-size:22px}.app{width:100%;max-width:760px;min-height:100dvh;margin:auto;background:#000}header{padding:28px 16px 20px;text-align:center;border-bottom:1px solid #8a6422}.brandline{display:flex;justify-content:center;align-items:center;gap:12px}.brandicon{font-size:42px;color:#e7a92d}.logo{color:#e7a92d;font-size:34px;font-weight:900}.sub{font-size:15px;margin-top:7px;text-transform:uppercase}main{padding:22px 16px 38px}.box{background:linear-gradient(145deg,#171717,#090909);border:1px solid #8a6422;border-radius:22px;padding:20px;margin-bottom:16px}h2{font-size:36px}input,select,textarea{width:100%;padding:15px;margin:6px 0 12px;background:#1b1b1b;color:#fff;border:1px solid #66502a;border-radius:14px;font-size:18px}button,.btn{background:#e7a92d;color:#090909;border:0;border-radius:14px;padding:16px 18px;font-size:19px;font-weight:900;text-decoration:none;display:inline-block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{overflow:hidden;background:#141414;border:1px solid #6e5223;border-radius:19px}.card img,.pic{width:100%;aspect-ratio:1;object-fit:cover}.pic{display:grid;place-items:center;font-size:62px;background:#222}.pad{padding:14px}.price{color:#e9bd50;font-weight:900;font-size:31px;line-height:1.15;margin-top:4px}.muted{color:#f0f0f0;font-size:19px;line-height:1.45;font-weight:600}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.danger{background:#6d1c1c;color:#fff}
-.voltar-bar{margin-bottom:18px}
-.voltar-btn{display:inline-flex;align-items:center;gap:10px;background:#171717;color:#e7a92d;border:1px solid #a87920;border-radius:16px;padding:16px 24px;font-size:22px;font-weight:900;text-decoration:none}
-.foto-editor{margin:16px 0 20px;padding:16px;border:1px solid #8a6422;border-radius:18px;background:#0d0d0d;text-align:center}
-.foto-preview{width:100%;max-height:360px;object-fit:contain;border-radius:15px;background:#181818;display:none;margin-bottom:14px}
-.foto-preview.show{display:block}
-.foto-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.foto-actions label,.foto-actions button{width:100%;margin:0;text-align:center;cursor:pointer}
-.file-hidden{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
-.prod-thumb{width:124px;height:124px;object-fit:cover;border-radius:14px;border:1px solid #8a6422;background:#222}
-.prod-info{display:flex;align-items:center;gap:14px;min-width:0}
-.prod-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.prod-actions .btn{font-size:18px;padding:15px 17px}.ver-fotos{width:100%;text-align:center;margin-top:10px}
-.galeria-produto{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-.galeria-produto .card img{width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer}
-.foto-grande{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.96);display:none;align-items:center;justify-content:center;padding:18px}
-.foto-grande.aberta{display:flex}
-.foto-grande img{max-width:96vw;max-height:82vh;object-fit:contain;border-radius:14px}
-.foto-fechar{position:absolute;top:18px;right:18px;font-size:24px}
-.foto-nav{position:absolute;top:50%;transform:translateY(-50%);font-size:34px;padding:14px 18px}
-.foto-ant{left:8px}.foto-prox{right:8px}
-.foto-contador{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-weight:bold}
-@media(max-width:480px){.foto-actions{grid-template-columns:1fr}.prod-thumb{width:112px;height:112px}.prod-info{align-items:flex-start}.prod-actions .btn{font-size:17px;padding:14px 15px}.price{font-size:29px}.muted{font-size:18px}h2{font-size:34px}}
-.menu-grid{display:flex;flex-direction:column;gap:14px}.menu-card{min-height:168px;padding:24px 22px;display:flex;align-items:center;gap:22px;color:#fff;text-decoration:none;background:linear-gradient(145deg,#171717,#090909);border:1px solid #a87920;border-radius:22px}.menu-icon{width:104px;flex:0 0 104px;text-align:center;color:#e7a92d;font-size:72px;line-height:1}.menu-copy{flex:1}.menu-title{font-size:34px;font-weight:900;margin-bottom:10px}.menu-desc{font-size:20px;color:#d0d0d0;line-height:1.25}.menu-arrow{font-size:58px;color:#e7a92d;font-weight:900}.menu-badge{background:#e7a92d;color:#090909;border-radius:50%;min-width:52px;height:52px;display:grid;place-items:center;font-size:22px;font-weight:900}.diferenciais{margin-top:32px;padding:30px 12px;border-top:2px solid #8a6422;text-align:center;color:#fff;font-size:31px;font-weight:900;line-height:1.55;letter-spacing:.2px}.diferenciais b{color:#e7a92d;font-size:36px}
-#splash{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .55s}#splash.hide{opacity:0;pointer-events:none}.splash-inner{text-align:center;padding:28px}.splash-mark{font-size:110px;line-height:1;color:#e7a92d;text-shadow:0 0 28px rgba(231,169,45,.4)}.splash-g3{font-size:80px;font-weight:900;color:#e7a92d;line-height:.9;margin-top:-18px}.splash-name{font-size:39px;font-weight:900;color:#e7a92d;margin-top:30px}.splash-sub{font-size:15px;line-height:1.5;margin-top:12px;text-transform:uppercase}.loader{width:42px;height:42px;border:4px solid #3b2c10;border-top-color:#e7a92d;border-radius:50%;margin:55px auto 14px;animation:spin .85s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:480px){.logo{font-size:28px}.brandicon{font-size:34px}.sub{font-size:11px}main{padding:18px 12px 30px}.menu-card{min-height:148px;padding:20px 16px;gap:16px}.menu-icon{width:88px;flex-basis:88px;font-size:62px}.menu-title{font-size:29px}.menu-desc{font-size:17px}.menu-arrow{font-size:48px}.splash-mark{font-size:90px}.splash-g3{font-size:66px}.splash-name{font-size:33px}}
-/* LEITURA GRANDE - BRECHÓ GETRES */
-.prod-info b{font-size:29px!important;line-height:1.2;font-weight:900!important}
-.prod-info .muted{font-size:19px!important;line-height:1.4}
-.prod-info .price{font-size:31px!important}
-.prod-actions .btn{font-size:18px!important;font-weight:900!important}
-@media(max-width:480px){
-  .prod-info b{font-size:27px!important}
-  .prod-info .muted{font-size:18px!important}
-  .prod-info .price{font-size:29px!important}
-  .prod-actions .btn{font-size:17px!important}
-}
-
-"""
 
 def db():
-    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
+    if USE_POSTGRES:
+        if psycopg2 is None:
+            raise RuntimeError("DATABASE_URL configurada, mas psycopg2-binary não está instalado.")
+        raw=psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require"))
+        return DBConn(raw,True)
+    raw=sqlite3.connect(DB)
+    raw.row_factory=sqlite3.Row
+    return DBConn(raw,False)
+
+
+def _insert_id(c, sql, params):
+    if c.pg:
+        cur=c.execute(sql.rstrip().rstrip(';')+" RETURNING id",params)
+        row=cur.fetchone(); return int(row["id"])
+    cur=c.execute(sql,params); return int(cur.lastrowid)
+
+
+def _upsert_config(c,k,v):
+    if c.pg:
+        c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(k,v))
+    else:
+        c.execute("INSERT OR REPLACE INTO config VALUES(?,?)",(k,v))
+
+
+def _insert_config_default(c,k,v):
+    if c.pg:
+        c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO NOTHING",(k,v))
+    else:
+        c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
+
+
+def _media_blob_to_bytes(v):
+    if v is None: return None
+    if isinstance(v,memoryview): return v.tobytes()
+    if isinstance(v,(bytes,bytearray)): return bytes(v)
+    return bytes(v)
+
+
+def save_media_bytes(arquivo,data,mime=None):
+    arquivo=os.path.basename(str(arquivo or ""))
+    if not arquivo: return
+    data=bytes(data)
+    mime=mime or mimetypes.guess_type(arquivo)[0] or "application/octet-stream"
+    # cópia local para resposta rápida no processo atual
+    pasta="static/produtos" if not arquivo.startswith("logo_getres") else "static"
+    os.makedirs(pasta,exist_ok=True)
+    try:
+        with open(os.path.join(pasta,arquivo),"wb") as f: f.write(data)
+    except OSError: pass
+    c=db()
+    try:
+        if c.pg:
+            c.execute("INSERT INTO media(arquivo,conteudo,mime) VALUES(?,?,?) ON CONFLICT(arquivo) DO UPDATE SET conteudo=EXCLUDED.conteudo,mime=EXCLUDED.mime",(arquivo,psycopg2.Binary(data),mime))
+        else:
+            c.execute("INSERT OR REPLACE INTO media(arquivo,conteudo,mime) VALUES(?,?,?)",(arquivo,sqlite3.Binary(data),mime))
+        c.commit()
+    finally: c.close()
+
+
+def save_uploaded_media(file_storage,arquivo):
+    try: file_storage.stream.seek(0)
+    except Exception: pass
+    data=file_storage.read()
+    save_media_bytes(arquivo,data,getattr(file_storage,"mimetype",None))
+
+
+def delete_media(arquivo):
+    arquivo=os.path.basename(str(arquivo or ""))
+    if not arquivo:return
+    for pasta in ("static/produtos","static"):
+        try: os.remove(os.path.join(pasta,arquivo))
+        except OSError: pass
+    c=db()
+    try:
+        c.execute("DELETE FROM media WHERE arquivo=?",(arquivo,)); c.commit()
+    finally:c.close()
+
+
+def media_url(arquivo):
+    return "/media/"+str(arquivo) if arquivo else ""
+
 
 def init():
     c=db()
-    c.executescript("""CREATE TABLE IF NOT EXISTS produtos(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,preco REAL,estoque INTEGER,imagem TEXT,descricao TEXT);
-CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
-CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
-    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE vendas ADD COLUMN offline_id TEXT","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1","ALTER TABLE produtos ADD COLUMN offline_id TEXT"]:
-        try: c.execute(sql)
-        except sqlite3.OperationalError: pass
-    try:
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
-    except sqlite3.OperationalError:
-        pass
+    if c.pg:
+        stmts=[
+        """CREATE TABLE IF NOT EXISTS produtos(id SERIAL PRIMARY KEY,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,preco DOUBLE PRECISION,estoque INTEGER,imagem TEXT,descricao TEXT)""",
+        """CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT)""",
+        """CREATE TABLE IF NOT EXISTS fotos(id SERIAL PRIMARY KEY,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0)""",
+        """CREATE TABLE IF NOT EXISTS vendas(id SERIAL PRIMARY KEY,data TEXT,total DOUBLE PRECISION,pagamento TEXT,itens TEXT)""",
+        """CREATE TABLE IF NOT EXISTS media(arquivo TEXT PRIMARY KEY,conteudo BYTEA,mime TEXT)"""
+        ]
+        for st in stmts:c.execute(st)
+        for st in [
+          "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'retirada'",
+          "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DOUBLE PRECISION DEFAULT 0",
+          "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'",
+          "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS estoque_devolvido INTEGER DEFAULT 0",
+          "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS offline_id TEXT",
+          "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo INTEGER DEFAULT 1",
+          "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS offline_id TEXT"]: c.execute(st)
+    else:
+        c.execute("CREATE TABLE IF NOT EXISTS produtos(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,preco REAL,estoque INTEGER,imagem TEXT,descricao TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0)")
+        c.execute("CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT)")
+        c.execute("CREATE TABLE IF NOT EXISTS media(arquivo TEXT PRIMARY KEY,conteudo BLOB,mime TEXT)")
+        for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE vendas ADD COLUMN offline_id TEXT","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1","ALTER TABLE produtos ADD COLUMN offline_id TEXT"]:
+            try:c.execute(sql)
+            except Exception:pass
+    try:c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
+    except Exception:pass
+    try:c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
+    except Exception:pass
     for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
-        c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
+        _insert_config_default(c,k,v)
     c.commit(); c.close()
 
 def migrar_nome_getres():
@@ -145,7 +195,23 @@ def logo_data_uri():
                     return "data:"+mime+";base64,"+base64.b64encode(f.read()).decode("ascii")
             except OSError:
                 pass
+    if salvo:
+        c=db(); r=c.execute("SELECT conteudo,mime FROM media WHERE arquivo=?",(os.path.basename(salvo),)).fetchone(); c.close()
+        if r:
+            data=_media_blob_to_bytes(r["conteudo"]); mime=r["mime"] or "image/png"
+            return "data:"+mime+";base64,"+base64.b64encode(data).decode("ascii")
     return ""
+
+@app.route("/media/<path:arquivo>")
+def media_file(arquivo):
+    from flask import Response, abort
+    arquivo=os.path.basename(arquivo)
+    c=db(); r=c.execute("SELECT conteudo,mime FROM media WHERE arquivo=?",(arquivo,)).fetchone(); c.close()
+    if not r: abort(404)
+    data=_media_blob_to_bytes(r["conteudo"])
+    resp=Response(data,mimetype=r["mime"] or mimetypes.guess_type(arquivo)[0] or "application/octet-stream")
+    resp.headers["Cache-Control"]="public, max-age=31536000, immutable"
+    return resp
 
 @app.route("/logo-getres")
 def logo_getres():
@@ -162,6 +228,10 @@ def logo_getres():
     for caminho in candidatos:
         if os.path.isfile(caminho):
             return send_file(os.path.abspath(caminho), max_age=0)
+    c=db(); r=c.execute("SELECT conteudo,mime FROM media WHERE arquivo=?",(os.path.basename(salvo),)).fetchone(); c.close()
+    if r:
+        from flask import Response
+        return Response(_media_blob_to_bytes(r["conteudo"]),mimetype=r["mime"] or "image/png")
     abort(404)
 
 def page(title,body,nav=True):
@@ -278,7 +348,7 @@ def destaques():
     c=db(); rows=c.execute("SELECT * FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall(); c.close()
     cards=""
     for r in rows:
-        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/static/produtos/"+r["imagem"]+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
+        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='"+media_url(r["imagem"])+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
         cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
     if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
     offline_js=r"""
@@ -302,7 +372,7 @@ def destaques():
     if(p.imagens && p.imagens.length && p.imagens[0]) return p.imagens[0];
     if(p.imagem){
       if(String(p.imagem).startsWith('data:') || String(p.imagem).startsWith('/')) return p.imagem;
-      return '/static/produtos/'+p.imagem;
+      return '/media/'+p.imagem;
     }
     return '';
   }
@@ -349,7 +419,7 @@ def produtos():
     if not rows:
         x+="<div class=box>Nenhuma blusa cadastrada.</div>"
     for r in rows:
-        foto=f"<img class=prod-thumb src='/static/produtos/{r['imagem']}'>" if r["imagem"] else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
+        foto=f"<img class=prod-thumb src='{media_url(r['imagem'])}'>" if r["imagem"] else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
         x+=f"""<div class=box>
         <div class=prod-info>{foto}<div><b style='font-size:29px;line-height:1.2;font-weight:900'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
         <div class=prod-actions>
@@ -367,7 +437,7 @@ def produtos():
 def form_prod(r=None):
     def v(k): return str(r[k] or "") if r else ""
     atual=v("imagem")
-    atual_src=f"/static/produtos/{atual}" if atual else ""
+    atual_src=media_url(atual) if atual else ""
     show=" show" if atual else ""
     return f"""<h2>{'✏️ Editar blusa' if r else '👕 Cadastrar blusa'}</h2>
 <form method=post enctype=multipart/form-data class=box id=produtoForm>
@@ -419,14 +489,13 @@ def produto_form(pid=None):
         if request.form.get("remover_imagem")=="1":
             img=""
             if old_img:
-                try: os.remove("static/produtos/"+old_img)
-                except OSError: pass
+                delete_media(old_img)
         novos=[f for f in request.files.getlist("imagem")[:6] if f and f.filename]
         arquivos_novos=[]
         for f in novos:
             ext=os.path.splitext(f.filename)[1].lower() or ".jpg"
             arq=secrets.token_hex(8)+ext
-            f.save("static/produtos/"+arq)
+            save_uploaded_media(f,arq)
             arquivos_novos.append(arq)
         if arquivos_novos: img=arquivos_novos[0]
         vals=(request.form["nome"],request.form.get("time_nome",""),request.form.get("categoria",""),request.form.get("tamanho",""),request.form.get("estado",""),float(request.form.get("preco","0").replace(",",".")),int(request.form.get("estoque","0")),img,request.form.get("descricao",""))
@@ -434,8 +503,7 @@ def produto_form(pid=None):
             c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,imagem=?,descricao=? WHERE id=?",vals+(pid,))
             produto_id=pid
         else:
-            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals)
-            produto_id=cur.lastrowid
+            produto_id=_insert_id(c,"INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals)
         if arquivos_novos:
             c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
             existentes=c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(produto_id,)).fetchone()["n"]
@@ -468,8 +536,7 @@ def excluir(pid):
     for f in fotos_rows:
         if f["arquivo"]: arquivos.add(f["arquivo"])
     for arq in arquivos:
-        try: os.remove("static/produtos/"+arq)
-        except OSError: pass
+        delete_media(arq)
     c.execute("DELETE FROM fotos WHERE produto_id=?",(pid,)); c.execute("DELETE FROM produtos WHERE id=?",(pid,))
     c.commit(); c.close(); return redirect("/produtos")
 
@@ -495,10 +562,10 @@ def galeria(pid):
         return page("Fotos",f"<h2>📸 {p['nome']}</h2><div class=box>Nenhuma foto cadastrada para esta blusa.</div>")
 
     thumbs="".join(
-        f"<div class=card><img src='/static/produtos/{arq}' onclick='abrirFoto({i})' alt='Foto {i+1}'></div>"
+        f"<div class=card><img src='{media_url(arq)}' onclick='abrirFoto({i})' alt='Foto {i+1}'></div>"
         for i,arq in enumerate(arquivos)
     )
-    js_arquivos=json.dumps(["/static/produtos/"+a for a in arquivos],ensure_ascii=False)
+    js_arquivos=json.dumps([media_url(a) for a in arquivos],ensure_ascii=False)
     body=f"""<h2>📸 {p['nome']}</h2>
     <div class=box><b>{len(arquivos)} {'foto' if len(arquivos)==1 else 'fotos'}</b>
     <div class=muted>Toque em uma imagem para visualizar em tamanho grande.</div></div>
@@ -535,14 +602,14 @@ def fotos(pid):
         for f in fs[:vagas]:
             ext=os.path.splitext(f.filename)[1].lower() or ".jpg"
             arq=secrets.token_hex(10)+ext
-            f.save("static/produtos/"+arq)
+            save_uploaded_media(f,arq)
             tem=c.execute("SELECT 1 FROM fotos WHERE produto_id=?",(pid,)).fetchone()
             c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(pid,arq,0 if tem else 1))
         c.commit(); c.close(); return redirect("/fotos/"+str(pid))
     rows=c.execute("SELECT * FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
     cards=""
     for f in rows:
-        cards+=f"""<div class=card><img src='/static/produtos/{f["arquivo"]}'><div class=pad>
+        cards+=f"""<div class=card><img src='{media_url(f["arquivo"])}'><div class=pad>
         {'<b>⭐ Principal</b><br>' if f["principal"] else ''}
         <a class=btn href='/foto-principal/{pid}/{f["id"]}'>⭐ Principal</a>
         <a class='btn danger' href='/foto-excluir/{pid}/{f["id"]}'>🗑 Excluir</a></div></div>"""
@@ -599,8 +666,7 @@ def foto_principal(pid,fid):
 def foto_excluir(pid,fid):
     c=db();f=c.execute("SELECT * FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
     if f:
-        try: os.remove("static/produtos/"+f["arquivo"])
-        except: pass
+        delete_media(f["arquivo"])
         c.execute("DELETE FROM fotos WHERE id=?",(fid,))
         if f["principal"]:
             n=c.execute("SELECT * FROM fotos WHERE produto_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
@@ -717,11 +783,10 @@ def sync_offline_product():
             if not isinstance(data,str) or "," not in data: continue
             cab,b64=data.split(",",1); ext=".png" if "png" in cab.lower() else ".webp" if "webp" in cab.lower() else ".jpg"
             arq=secrets.token_hex(10)+ext
-            with open(os.path.join("static","produtos",arq),"wb") as f: f.write(base64.b64decode(b64))
+            save_media_bytes(arq,base64.b64decode(b64),"image/png" if ext==".png" else "image/webp" if ext==".webp" else "image/jpeg")
             arquivos.append(arq)
         img=arquivos[0] if arquivos else ""
-        cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid))
-        pid=cur.lastrowid
+        pid=_insert_id(c,"INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid))
         for i,a in enumerate(arquivos): c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(pid,a,1 if i==0 else 0))
         c.commit();c.close();return {"ok":True,"id":pid}
     except Exception as e:
@@ -769,11 +834,10 @@ def sync_offline_sale():
         except Exception: taxa=0.0
     total+=taxa
     try:
-        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id) VALUES(?,?,?,?,?,?,?,?,?)",
+        vid=_insert_id(c,"INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id) VALUES(?,?,?,?,?,?,?,?,?)",
                       (d.get("criado_em") or datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),
-                       json.dumps(itens_servidor,ensure_ascii=False),tipo,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id))
-        vid=cur.lastrowid;c.commit()
-    except sqlite3.IntegrityError:
+                       json.dumps(itens_servidor,ensure_ascii=False),tipo,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id));c.commit()
+    except Exception:
         r=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
         vid=r["id"] if r else None
     c.close()
@@ -809,8 +873,8 @@ def vender():
         try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
         except: taxa=0
     total+=taxa
-    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
-    vid=cur.lastrowid;c.commit();c.close();return {"ok":True,"id":vid}
+    vid=_insert_id(c,"INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
+    c.commit();c.close();return {"ok":True,"id":vid}
 
 @app.route("/venda/<int:vid>")
 def venda(vid):
@@ -1005,15 +1069,25 @@ def config():
     if request.method=="POST":
         c=db()
         for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem","impressora","taxa_entrega"]:
-            c.execute("INSERT OR REPLACE INTO config VALUES(?,?)",(k,request.form.get(k,"")))
+            _upsert_config(c,k,request.form.get(k,""))
+        c.commit()
         logo=request.files.get("logo")
         if logo and logo.filename:
             ext=os.path.splitext(logo.filename)[1].lower() or ".png"; arq="logo_getres"+ext
-            logo.save("static/"+arq); c.execute("INSERT OR REPLACE INTO config VALUES('logo',?)",(arq,))
-        c.commit();c.close();return redirect("/config")
+            save_uploaded_media(logo,arq); _upsert_config(c,"logo",arq); c.commit()
+        c.close();return redirect("/config")
     C=conf();labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX","whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço","mensagem":"Mensagem do comprovante","impressora":"Impressora","taxa_entrega":"Taxa de entrega (R$)"}
     fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>" for k in labels)
-    return page("Configurações",f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta.</p><button style='width:100%'>SALVAR</button></form>")
+    return page("Configurações",f"<h2>Configurações</h2><div class=box><b>Armazenamento:</b> {'PostgreSQL persistente' if USE_POSTGRES else 'SQLite local (não persistente no Render Free)'}</div><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta.</p><button style='width:100%'>SALVAR</button></form>")
+
+
+@app.route("/status-banco")
+def status_banco():
+    try:
+        c=db(); nprod=c.execute("SELECT COUNT(*) n FROM produtos").fetchone()["n"]; nven=c.execute("SELECT COUNT(*) n FROM vendas").fetchone()["n"]; nmedia=c.execute("SELECT COUNT(*) n FROM media").fetchone()["n"]; c.close()
+        return {"ok":True,"backend":"postgresql" if USE_POSTGRES else "sqlite","persistente":bool(USE_POSTGRES),"produtos":nprod,"vendas":nven,"arquivos":nmedia}
+    except Exception as e:
+        return {"ok":False,"erro":str(e)},500
 
 @app.route("/teste")
 def teste():
