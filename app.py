@@ -84,11 +84,15 @@ def init():
 CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
 CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
-    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE vendas ADD COLUMN offline_id TEXT","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
+    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE vendas ADD COLUMN offline_id TEXT","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1","ALTER TABLE produtos ADD COLUMN offline_id TEXT"]:
         try: c.execute(sql)
         except sqlite3.OperationalError: pass
     try:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
     except sqlite3.OperationalError:
         pass
     for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
@@ -162,6 +166,14 @@ function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_of
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
 function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
 function setOfflineHistory(h){localStorage.setItem("getres_offline_history",JSON.stringify(h))}
+function getOfflineProducts(){try{return JSON.parse(localStorage.getItem("getres_offline_products")||"[]")}catch(e){return []}}
+function setOfflineProducts(q){localStorage.setItem("getres_offline_products",JSON.stringify(q))}
+async function fileDataURL(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)})}
+async function syncOfflineProducts(){
+  if(!navigator.onLine)return; let q=getOfflineProducts(); if(!q.length)return; const rest=[];
+  for(const p of q){try{const r=await fetch('/sync-offline-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});const d=await r.json();if(!(r.ok&&d.ok)){p.last_error=d.erro||'Falha ao sincronizar produto';rest.push(p)}}catch(e){rest.push(p)}}
+  setOfflineProducts(rest); if(!rest.length)refreshOfflineCatalog();
+}
 function saveOfflineHistory(sale,status,serverId,erro){
   let h=getOfflineHistory();
   const i=h.findIndex(x=>x.offline_id===sale.offline_id);
@@ -210,9 +222,9 @@ async function syncOfflineSales(){
   if(typeof renderPedidosOffline==="function")renderPedidosOffline();
   if(rest.length===0)refreshOfflineCatalog();
 }
-window.addEventListener("online",()=>{showNetStatus();syncOfflineSales()});
+window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales()});
 window.addEventListener("offline",showNetStatus);
-document.addEventListener("DOMContentLoaded",()=>{showNetStatus();refreshOfflineCatalog();syncOfflineSales()});
+document.addEventListener("DOMContentLoaded",()=>{showNetStatus();refreshOfflineCatalog();syncOfflineProducts();syncOfflineSales()});
 </script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
@@ -277,7 +289,8 @@ def produtos():
         {("<a class='btn danger' href='/desativar/"+str(r['id'])+"'>⛔ DESATIVAR</a>" if int(r["ativo"] if r["ativo"] is not None else 1)==1 else "<a class='btn' href='/reativar/"+str(r['id'])+"'>♻️ REATIVAR</a>")}
         <a class='btn danger' href='/excluir/{r['id']}' onclick="return confirm('Excluir definitivamente? Se já houve venda, será apenas desativado.')">🗑️ EXCLUIR</a>
         </div></div>"""
-    x+="<a class=btn href='/'>← MENU PRINCIPAL</a>"
+    x+="<div id=produtosOffline></div><a class=btn href='/'>← MENU PRINCIPAL</a>"
+    x+="""<script>(function(){const el=document.getElementById('produtosOffline'),q=getOfflineProducts();if(!el||!q.length)return;el.innerHTML='<h3>📴 Produtos aguardando sincronização</h3>'+q.map(p=>`<div class=box><b>${p.nome}</b><div class=muted>${p.time_nome||''} • ${p.tamanho||''}</div><div class=price>R$ ${Number(p.preco||0).toFixed(2)}</div><div class=muted>⏳ Salvo neste celular</div></div>`).join('')})();</script>"""
     return page("Produtos",x)
 
 def form_prod(r=None):
@@ -315,6 +328,14 @@ def form_prod(r=None):
 const fi=document.getElementById('imagemInput'), pv=document.getElementById('preview'), sf=document.getElementById('semFoto'), rm=document.getElementById('removerImagem');
 fi.addEventListener('change',()=>{{let fs=[...(fi.files||[])];if(fs.length>6){{alert('Escolha no máximo 6 fotos.');fi.value='';return}};let mp=document.getElementById('multiPreview');mp.innerHTML='';fs.forEach(f=>{{let im=document.createElement('img');im.src=URL.createObjectURL(f);im.style='width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px';mp.appendChild(im)}});if(fs[0]){{pv.src=URL.createObjectURL(fs[0]);pv.classList.add('show');sf.style.display='none';rm.value='0'}}}});
 function excluirPreview(){{fi.value='';pv.removeAttribute('src');pv.classList.remove('show');sf.style.display='block';rm.value='1'}}
+document.getElementById('produtoForm').addEventListener('submit',async function(ev){{
+ if(navigator.onLine)return;
+ ev.preventDefault();
+ const fd=new FormData(this), fotos=[...(fi.files||[])].slice(0,6), imagens=[];
+ for(const f of fotos) imagens.push(await fileDataURL(f));
+ const p={{offline_id:'prod-'+Date.now()+'-'+Math.random().toString(16).slice(2),nome:fd.get('nome')||'',time_nome:fd.get('time_nome')||'',categoria:fd.get('categoria')||'',tamanho:fd.get('tamanho')||'',estado:fd.get('estado')||'',preco:Number(String(fd.get('preco')||'0').replace(',','.')),estoque:Number(fd.get('estoque')||0),descricao:fd.get('descricao')||'',imagens:imagens,criado_em:new Date().toISOString()}};
+ let q=getOfflineProducts();q.unshift(p);setOfflineProducts(q);alert('Produto e fotos salvos OFFLINE. Serão sincronizados quando a internet voltar.');location='/produtos';
+}});
 </script>"""
 
 @app.route("/novo",methods=["GET","POST"])
@@ -612,6 +633,28 @@ carregar();
 </script>"""
     return page("Carrinho",html.replace("__TAXA__",f"{taxa:.2f}"))
 
+
+@app.route("/sync-offline-product",methods=["POST"])
+def sync_offline_product():
+    d=request.get_json() or {}; oid=str(d.get("offline_id") or "").strip()
+    if not oid or not str(d.get("nome") or "").strip(): return {"ok":False,"erro":"Produto offline inválido."},400
+    c=db(); ex=c.execute("SELECT id FROM produtos WHERE offline_id=?",(oid,)).fetchone()
+    if ex: c.close(); return {"ok":True,"id":ex["id"],"duplicado":True}
+    try:
+        imagens=d.get("imagens") or []; arquivos=[]
+        for data in imagens[:6]:
+            if not isinstance(data,str) or "," not in data: continue
+            cab,b64=data.split(",",1); ext=".png" if "png" in cab.lower() else ".webp" if "webp" in cab.lower() else ".jpg"
+            arq=secrets.token_hex(10)+ext
+            with open(os.path.join("static","produtos",arq),"wb") as f: f.write(base64.b64decode(b64))
+            arquivos.append(arq)
+        img=arquivos[0] if arquivos else ""
+        cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid))
+        pid=cur.lastrowid
+        for i,a in enumerate(arquivos): c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(pid,a,1 if i==0 else 0))
+        c.commit();c.close();return {"ok":True,"id":pid}
+    except Exception as e:
+        c.rollback();c.close();return {"ok":False,"erro":str(e)},400
 
 @app.route("/offline/catalogo")
 def offline_catalogo():
@@ -914,8 +957,8 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-offline-real-v3';
-const CORE=['/','/?menu=1','/produtos','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
+    js="""const C='brecho-getres-offline-real-v4';
+const CORE=['/','/?menu=1','/produtos','/novo','/destaques','/carrinho','/pedidos','/estatisticas','/menu','/config','/offline/catalogo'];
 self.addEventListener('install',e=>e.waitUntil((async()=>{
   const c=await caches.open(C);
   for(const url of CORE){
