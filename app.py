@@ -84,11 +84,9 @@ def init():
 CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
 CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
-    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE vendas ADD COLUMN offline_id TEXT","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
+    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
         try: c.execute(sql)
         except sqlite3.OperationalError: pass
-    try: c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
-    except sqlite3.OperationalError: pass
     for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
         c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
     c.commit(); c.close()
@@ -128,11 +126,7 @@ def page(title,body,nav=True):
         destino="/?menu=1"
         body=f"<div class=voltar-bar><a class=voltar-btn href='{destino}'>← VOLTAR</a></div>"+body
     logo_header=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo BRECHÓ GETRES' style='width:42px;height:42px;object-fit:contain;display:block'>" if C.get("logo") else "<span class=brandicon>♧</span>")
-    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}
-async function sincronizarVendasOffline(){if(!navigator.onLine)return;let fila=[];try{fila=JSON.parse(localStorage.g3vendasPendentes||'[]')}catch(e){};if(!fila.length)return;let restantes=[];for(const v of fila){try{let r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});let x=await r.json();if(!r.ok||!x.ok)restantes.push(v)}catch(e){restantes.push(v)}}localStorage.g3vendasPendentes=JSON.stringify(restantes)}
-window.addEventListener('online',sincronizarVendasOffline);sincronizarVendasOffline();
-</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
+    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
 def home():
@@ -470,21 +464,18 @@ def carrinho():
 <div id=taxaInfo class=muted style="margin:8px 0 16px">Retirada no local: sem taxa.</div>
 <label>Pagamento</label>
 <select id=pag><option>PIX</option><option>Dinheiro</option><option>Débito</option><option>Crédito</option></select>
-<button id=btnFinalizar type="button" style="width:100%" onclick="fechar()">FINALIZAR VENDA</button>
-<div id=msgVenda class=muted style="margin-top:12px;text-align:center"></div>
+<button style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
 </div>
 <script>
 let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega={taxa:.2f}, subtotal=0;
-fetch('/api-cart?ids='+ids.join(',')).then(x=>x.json()).then(d=>{{window.d=d;localStorage.g3cartDados=JSON.stringify(d);subtotal=d.reduce((s,x)=>s+x.preco,0);render(d)}}).catch(()=>{{let d=[];try{{d=JSON.parse(localStorage.g3cartDados||'[]')}}catch(e){{}};window.d=d;subtotal=d.reduce((s,x)=>s+x.preco,0);render(d)}});
+fetch('/api-cart?ids='+ids.join(',')).then(x=>x.json()).then(d=>{{window.d=d;subtotal=d.reduce((s,x)=>s+x.preco,0);render(d)}});
 function render(d){{let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
 itens.innerHTML=d.map(x=>`<p>${{x.nome}} <b style="float:right">R$ ${{x.preco.toFixed(2)}}</b></p>`).join('')+
 `<hr><p>Subtotal <b style="float:right">R$ ${{subtotal.toFixed(2)}}</b></p>`+
 (taxa?`<p>Taxa de entrega <b style="float:right">R$ ${{taxa.toFixed(2)}}</b></p>`:'')+
 `<hr><b>Total: R$ ${{total.toFixed(2)}}</b>`}}
 function atualizarTotal(){{taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${{taxaEntrega.toFixed(2)}}`:'Retirada no local: sem taxa.';render(window.d||[])}}
-function offlineId(){{return 'OFF-'+Date.now()+'-'+Math.random().toString(36).slice(2,10)}}
-function salvarOffline(venda){{let fila=[];try{{fila=JSON.parse(localStorage.g3vendasPendentes||'[]')}}catch(e){{}};fila.push(venda);localStorage.g3vendasPendentes=JSON.stringify(fila);localStorage.removeItem('g3cart');localStorage.removeItem('g3cartDados');ids=[];document.getElementById('itens').innerHTML='<h3>✅ VENDA REGISTRADA OFFLINE</h3><p>Ela será sincronizada automaticamente quando houver conexão.</p>';document.getElementById('btnFinalizar').disabled=true;document.getElementById('msgVenda').textContent='Venda salva no aparelho. Pode continuar usando o app.'}}
-function fechar(){{if(!ids.length || !window.d || !window.d.length || subtotal<=0){{alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}}let venda={{ids:ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,offline_id:offlineId()}};let b=document.getElementById('btnFinalizar');b.disabled=true;b.textContent='FINALIZANDO...';fetch('/vender',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(venda)}}).then(async r=>{{let x=await r.json();if(!r.ok||!x.ok)throw new Error(x.erro||'Falha ao finalizar');localStorage.removeItem('g3cart');localStorage.removeItem('g3cartDados');location='/venda/'+x.id}}).catch(e=>{{if(!navigator.onLine || String(e).includes('Failed to fetch') || String(e).includes('NetworkError')){{salvarOffline(venda)}}else{{b.disabled=false;b.textContent='FINALIZAR VENDA';alert(e.message||'Não foi possível finalizar a venda.')}}}})}}
+function fechar(){{if(!ids.length || !window.d || !window.d.length || subtotal<=0){{alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}}fetch('/vender',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0}})}}).then(x=>x.json()).then(x=>{{if(x.ok){{localStorage.removeItem('g3cart');location='/venda/'+x.id}}else alert(x.erro)}})}}
 </script>""")
 
 @app.route("/api-cart")
@@ -501,10 +492,6 @@ def api_cart():
 def vender():
     d=request.get_json() or {}
     ids=d.get("ids",[])
-    offline_id=str(d.get("offline_id","") or "").strip() or None
-    if offline_id:
-        c0=db(); existente=c0.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone(); c0.close()
-        if existente: return {"ok":True,"id":existente["id"],"sincronizada":True}
     if not ids:
         return {"ok":False,"erro":"Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar."},400
     c=db();it=[];total=0
@@ -521,7 +508,7 @@ def vender():
         try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
         except: taxa=0
     total+=taxa
-    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id) VALUES(?,?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id))
+    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
     vid=cur.lastrowid;c.commit();c.close();return {"ok":True,"id":vid}
 
 @app.route("/venda/<int:vid>")
@@ -708,7 +695,7 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-finalizar-offline-v5';
+    js="""const C='brecho-getres-6-fotos-logo-v4';
 self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/produtos','/carrinho','/pedidos','/estatisticas','/menu','/config']))));
 self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{let x=r.clone();caches.open(C).then(c=>c.put(e.request,x));return r}).catch(()=>caches.match(e.request)))});
 """
