@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V23 — PEDIDOS E VENDA OFFLINE CORRIGIDOS
+# BRECHÓ GETRES — FINAL V24 — OFFLINE SEM DUPLICATA E SEM TELA BRANCA
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -1004,12 +1004,12 @@ function render(d){
 }
 function atualizarTotal(){taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${taxaEntrega.toFixed(2)}`:'Retirada no local: sem taxa.';render(window.d||[])}
 function uuidOffline(){return 'getres-'+Date.now()+'-'+Math.random().toString(16).slice(2)}
-function salvarOffline(){
+function salvarOffline(transactionId){
   const d=window.d||[]; if(!d.length)return alert('Não há dados do produto salvos para vender offline.');
   const qtd={}; ids.forEach(id=>qtd[Number(id)]=(qtd[Number(id)]||0)+1);
   for(const x of d){const precisa=qtd[Number(x.id)]||0,disp=Number(x.estoque||0);if(precisa>disp){alert('Estoque insuficiente para '+x.nome+'. Disponível: '+disp);return}}
   const sale={
-    offline_id:uuidOffline(),
+    offline_id:transactionId||uuidOffline(),
     criado_em:new Date().toISOString(),
     pagamento:pag.value,
     tipo_entrega:entrega.value,
@@ -1028,15 +1028,27 @@ function salvarOffline(){
   alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
   location='/pedidos';
 }
+let finalizandoVenda=false;
 async function fechar(){
+  if(finalizandoVenda)return;
   if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
-  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0};
-  if(!navigator.onLine){salvarOffline();return}
+  finalizandoVenda=true;
+  const btn=document.getElementById('btnFinalizar');
+  if(btn){btn.disabled=true;btn.textContent='FINALIZANDO...'}
+  const transactionId=uuidOffline();
+  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,offline_id:transactionId};
+  if(!navigator.onLine){salvarOffline(transactionId);return}
   try{
     const r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const x=await r.json();
-    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id}else alert(x.erro);
-  }catch(e){salvarOffline()}
+    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id;return}
+    alert(x.erro||'Não foi possível finalizar a venda.');
+    finalizandoVenda=false;if(btn){btn.disabled=false;btn.textContent='FINALIZAR VENDA'}
+  }catch(e){
+    // Se o servidor chegou a gravar antes de a conexão cair, o mesmo transactionId
+    // será usado na sincronização e o servidor reconhecerá a venda já existente.
+    salvarOffline(transactionId)
+  }
 }
 carregar();
 </script>"""
@@ -1114,6 +1126,7 @@ def api_cart():
 @app.route("/vender",methods=["POST"])
 def vender():
     d=request.get_json() or {}
+    offline_id=str(d.get("offline_id") or "").strip() or None
     ids=d.get("ids",[]) or []
     if not ids:
         return {"ok":False,"erro":"Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar."},400
@@ -1124,6 +1137,11 @@ def vender():
     contagem={}
     for pid in ids: contagem[pid]=contagem.get(pid,0)+1
     c=db(); itens=[]; total=0.0
+    if offline_id:
+        existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
+        if existente:
+            vid=existente["id"];c.close()
+            return {"ok":True,"id":vid,"duplicado":True}
     try:
         # Trava, valida e reserva o estoque no momento em que a venda é finalizada.
         # Confirmar pagamento depois não baixa novamente.
@@ -1143,9 +1161,16 @@ def vender():
             try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
             except Exception: taxa=0.0
         total+=taxa
-        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,1))
+        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                      (datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id,1))
         vid=cur.lastrowid; c.commit(); c.close(); return {"ok":True,"id":vid}
+    except psycopg2.IntegrityError:
+        c.rollback()
+        if offline_id:
+            r=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
+            if r:
+                vid=r["id"];c.close();return {"ok":True,"id":vid,"duplicado":True}
+        c.close();return {"ok":False,"erro":"Não foi possível concluir a venda."},409
     except Exception as e:
         c.rollback(); c.close(); return {"ok":False,"erro":str(e)},409
 
@@ -1266,7 +1291,9 @@ def pedidos():
         "total":float(r["total"] or 0),
         "status":str(r["status"] or "AGUARDANDO_PAGAMENTO"),
         "pagamento":str(r["pagamento"] or ""),
-        "tipo_entrega":str(r["tipo_entrega"] or "retirada")
+        "tipo_entrega":str(r["tipo_entrega"] or "retirada"),
+        "taxa_entrega":float(r["taxa_entrega"] or 0),
+        "data":str(r["data"] or "")
     } for r in rows],ensure_ascii=False)
     x+="<script>try{localStorage.setItem('getres_server_orders',JSON.stringify("+server_orders+"))}catch(e){}</script>"
     x+="""<script>
@@ -1455,7 +1482,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-5-OFFLINE-PEDIDOS-VENDA","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-6-OFFLINE-IDEMPOTENTE","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1477,7 +1504,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v23-offline-pedidos-venda';
+const CACHE='getres-final-v24-offline-sem-duplicata-sem-tela-branca';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
@@ -1544,7 +1571,7 @@ function render(){
  const srvHtml=srv.map(v=>{
    const st=v.status||'AGUARDANDO_PAGAMENTO';
    const rotulo=st==='PAGO'?'✅ PAGO':st==='CANCELADO'?'❌ CANCELADO':'⏳ AGUARDANDO PAGAMENTO';
-   return `<a class="box" href="/venda/${Number(v.id)}"><div class="row"><div><b>Venda #${Number(v.id)}</b><div class="muted">${rotulo}</div></div><div>R$ ${Number(v.total||0).toFixed(2)}</div></div></a>`;
+   return `<button class="box" style="width:100%;text-align:left" data-venda="${Number(v.id)}"><div class="row"><div><b>Venda #${Number(v.id)}</b><div class="muted">${rotulo}</div></div><div>R$ ${Number(v.total||0).toFixed(2)}</div></div></button>`;
  }).join('');
 
  document.getElementById('lista').innerHTML=avisos+offHtml+srvHtml || '<div class="box">Nenhum pedido salvo.</div>';
@@ -1555,6 +1582,42 @@ function render(){
    set('getres_offline_history',get('getres_offline_history',[]).filter(x=>x.offline_id!==id));
    render();
  });
+ document.querySelectorAll('[data-venda]').forEach(b=>b.onclick=()=>abrirVenda(Number(b.getAttribute('data-venda'))));
+}
+function abrirVenda(vid){
+ const srv=get('getres_server_orders',[]);
+ const v=srv.find(x=>Number(x.id)===Number(vid));
+ if(!v){alert('Os dados desta venda ainda não estão salvos neste aparelho.');return}
+ const st=v.status||'AGUARDANDO_PAGAMENTO';
+ const rotulo=st==='PAGO'?'✅ PAGO':st==='CANCELADO'?'❌ CANCELADO':'⏳ AGUARDANDO PAGAMENTO';
+ const pode=st!=='PAGO'&&st!=='CANCELADO';
+ const total=Number(v.total||0).toFixed(2).replace('.',',');
+ document.querySelector('main').innerHTML=`<div class="brand">♧ BRECHÓ GETRES</div>
+ <button class="btn" id="voltaPedidos">← PEDIDOS</button><h1>Venda #${vid}</h1>
+ <div class="box"><div class="price">R$ ${total}</div><div class="muted">Status: ${rotulo}</div>
+ <div class="muted">Pagamento: ${esc(v.pagamento||'')}</div>
+ <div class="muted">Recebimento: ${v.tipo_entrega==='entrega'?'Entrega':'Retirada no local'}</div></div>
+ ${v.pagamento==='PIX'&&pode?'<div class="box" style="text-align:center"><b>💠 PIX QR CODE</b><div class="muted">O QR Code completo requer internet. O valor e a confirmação continuam disponíveis offline.</div></div>':''}
+ ${pode?'<button class="btn" id="confirmaVenda">✅ CONFIRMAR PAGAMENTO OFFLINE</button><button class="danger" id="cancelaVenda">❌ CANCELAR PEDIDO OFFLINE</button>':''}
+ ${st==='PAGO'?'<div class="box notice"><b>✅ PAGAMENTO CONFIRMADO</b></div>':''}`;
+ document.getElementById('voltaPedidos').onclick=()=>location.reload();
+ if(pode){
+   document.getElementById('confirmaVenda').onclick=()=>filaAcao('confirmar',vid);
+   document.getElementById('cancelaVenda').onclick=()=>filaAcao('cancelar',vid);
+ }
+}
+function filaAcao(tipo,vid){
+ const msg=tipo==='confirmar'?'Confirmar o pagamento desta venda?':'Cancelar esta venda?';
+ if(!confirm(msg))return;
+ let a=get('getres_offline_actions',[]);
+ a=a.filter(x=>Number(x.vid)!==Number(vid));
+ a.push({tipo:tipo,vid:Number(vid),criado_em:new Date().toISOString()});
+ set('getres_offline_actions',a);
+ let srv=get('getres_server_orders',[]);
+ srv=srv.map(v=>Number(v.id)===Number(vid)?({...v,status:tipo==='confirmar'?'PAGO':'CANCELADO'}):v);
+ set('getres_server_orders',srv);
+ alert(tipo==='confirmar'?'Pagamento confirmado OFFLINE. Será sincronizado quando a internet voltar.':'Cancelamento salvo OFFLINE. Será sincronizado quando a internet voltar.');
+ location.reload();
 }
 render();
 </script></body></html>`;
