@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT
     for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
         try: c.execute(sql)
         except sqlite3.OperationalError: pass
-    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
+    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"android","largura_papel":"58","impressora_nome":"KA-1445","impressora_ip":"","impressora_porta":"9100","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
         c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
     c.commit(); c.close()
 
@@ -101,6 +101,57 @@ def migrar_nome_getres():
 
 def conf():
     c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close(); return d
+
+def largura_impressao_mm(C=None):
+    C=C or conf()
+    try:
+        mm=int(str(C.get("largura_papel","58")).strip())
+    except Exception:
+        mm=58
+    return 76 if mm>=80 else 54
+
+def botoes_impressao(texto_compartilhar="BRECHÓ GETRES"):
+    """Opções de impressão: Android, compartilhamento, ESC/POS, USB/OTG, Wi-Fi e RawBT."""
+    texto_json=json.dumps(texto_compartilhar,ensure_ascii=False)
+    return f"""
+    <div class='acoes-impressao'>
+      <button type='button' onclick='window.print()'>🖨️ ANDROID / IMPRESSÃO PADRÃO</button>
+      <button type='button' onclick='compartilharImpressao()'>📤 COMPARTILHAR PARA APP DE IMPRESSÃO</button>
+      <button type='button' onclick='copiarEscPos()'>📋 COPIAR TEXTO ESC/POS</button>
+      <details style='margin-top:8px;text-align:left'>
+        <summary style='cursor:pointer;font-weight:bold'>Outras opções</summary>
+        <p style='font-size:12px'>• RawBT: opcional, para quem já usa.</p>
+        <p style='font-size:12px'>• USB/OTG: use um serviço Android compatível com sua impressora.</p>
+        <p style='font-size:12px'>• Wi-Fi/IP: use o serviço/plugin do fabricante ou um serviço ESC/POS.</p>
+        <p style='font-size:12px'>• Bluetooth direto: reservado para versão Android nativa/híbrida.</p>
+      </details>
+    </div>
+    <script>
+    const TEXTO_IMPRESSAO={texto_json};
+    async function compartilharImpressao(){{
+      if(navigator.share){{
+        try{{
+          await navigator.share({{title:'BRECHÓ GETRES',text:TEXTO_IMPRESSAO}});
+          return;
+        }}catch(e){{}}
+      }}
+      try{{
+        await navigator.clipboard.writeText(TEXTO_IMPRESSAO);
+        alert('Conteúdo copiado. Abra seu aplicativo de impressão e cole/envie.');
+      }}catch(e){{
+        alert('Use ANDROID / IMPRESSÃO PADRÃO para escolher um serviço de impressão instalado.');
+      }}
+    }}
+    async function copiarEscPos(){{
+      try{{
+        await navigator.clipboard.writeText(TEXTO_IMPRESSAO);
+        alert('Texto copiado para uso em app ESC/POS, RawBT ou plugin da impressora.');
+      }}catch(e){{
+        alert('Não foi possível copiar. Use o botão de impressão padrão.');
+      }}
+    }}
+    </script>
+    """
 
 @app.route("/logo-getres")
 def logo_getres():
@@ -608,9 +659,30 @@ def cancelar_pedido(vid):
 @app.route("/comprovante/<int:vid>")
 def comprovante(vid):
     c=db();v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone();c.close();C=conf()
-    itens=json.loads(v["itens"]);linhas="".join(f"<p style='overflow-wrap:anywhere'>{x['nome']} {x['tamanho']}<br>R$ {x['preco']:.2f}</p>" for x in itens)
-    logo=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block;margin:0 auto 2mm'>" if C.get("logo") else "")
-    return f"""<!doctype html><meta name=viewport content='width=device-width'><style>body{{width:54mm;margin:auto;font:12px monospace;color:#000;background:#fff;text-align:center}}hr{{border:0;border-top:1px dashed}}button{{width:100%;padding:12px}}.marca{{display:flex;align-items:center;justify-content:center;gap:5px}}@media print{{button{{display:none}}}}</style><div class=marca style="display:block">{logo}<h2 style="margin:0 0 2mm">{C['nome']}</h2></div><p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr><p>{'ENTREGA - Taxa R$ %.2f' % v['taxa_entrega'] if v['tipo_entrega']=='entrega' else 'RETIRADA NO LOCAL'}</p><h3>TOTAL R$ {v['total']:.2f}</h3><p>{v['pagamento']}<br>{C['mensagem']}</p><button onclick=print()>IMPRIMIR / RAWBT</button>"""
+    if not v:return "Venda não encontrada",404
+    itens=json.loads(v["itens"] or "[]")
+    linhas="".join(f"<p style='overflow-wrap:anywhere;margin:5px 0'>{x['nome']} {x.get('tamanho','')}<br>R$ {float(x['preco']):.2f}</p>" for x in itens)
+    largura=largura_impressao_mm(C)
+    logo=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if C.get("logo") else "<span style='font-size:24px;font-weight:bold'>♧</span>")
+    itens_txt="\\n".join(f"{x['nome']} {x.get('tamanho','')} - R$ {float(x['preco']):.2f}" for x in itens)
+    entrega_txt=(f"ENTREGA - Taxa R$ {float(v['taxa_entrega'] or 0):.2f}" if v["tipo_entrega"]=="entrega" else "RETIRADA NO LOCAL")
+    texto=(f"{C.get('nome','BRECHÓ GETRES')}\\n{C.get('cnpj','')}\\n{C.get('endereco','')}\\n"
+           f"COMPROVANTE #{vid}\\n{itens_txt}\\n{entrega_txt}\\nTOTAL R$ {float(v['total']):.2f}\\n"
+           f"{v['pagamento']}\\n{C.get('mensagem','')}")
+    botoes=botoes_impressao(texto)
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
+    <style>
+    @page{{size:{largura}mm auto;margin:0}}
+    *{{box-sizing:border-box}}
+    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;font:12px monospace;color:#000;background:#fff;text-align:center}}
+    hr{{border:0;border-top:1px dashed #000}}button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}
+    .marca{{display:flex;align-items:center;justify-content:center;gap:5px}}.acoes-impressao{{margin-top:8px}}
+    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
+    </style></head><body>
+    <div class=marca>{logo}<h2 style="margin:0;font-size:15px;line-height:1;white-space:nowrap">{C['nome']}</h2></div>
+    <p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr>
+    <p>{entrega_txt}</p><h3>TOTAL R$ {float(v['total']):.2f}</h3>
+    <p>{v['pagamento']}<br>{C['mensagem']}</p>{botoes}</body></html>"""
 
 @app.route("/pedidos")
 def pedidos():
@@ -620,7 +692,7 @@ def pedidos():
 
 @app.route("/menu")
 def menu():
-    return page("Menu","""<h2>Menu</h2><div class=box><a class=btn href=/config>⚙️ Configurações</a><br><br><a class=btn href=/teste>🖨️ Teste RawBT 58 mm</a></div>""")
+    return page("Menu","""<h2>Menu</h2><div class=box><a class=btn href=/config>⚙️ Configurações</a><br><br><a class=btn href=/teste>🖨️ Testar impressora</a></div>""")
 
 @app.route("/estatisticas")
 def estatisticas():
@@ -671,21 +743,96 @@ def estatisticas():
 def config():
     if request.method=="POST":
         c=db()
-        for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem","impressora","taxa_entrega"]:
+        for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem",
+                  "impressora","largura_papel","impressora_nome","impressora_ip","impressora_porta",
+                  "taxa_entrega"]:
             c.execute("INSERT OR REPLACE INTO config VALUES(?,?)",(k,request.form.get(k,"")))
         logo=request.files.get("logo")
         if logo and logo.filename:
             ext=os.path.splitext(logo.filename)[1].lower() or ".png"; arq="logo_getres"+ext
             logo.save("static/"+arq); c.execute("INSERT OR REPLACE INTO config VALUES('logo',?)",(arq,))
         c.commit();c.close();return redirect("/config")
-    C=conf();labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX","whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço","mensagem":"Mensagem do comprovante","impressora":"Impressora","taxa_entrega":"Taxa de entrega (R$)"}
-    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>" for k in labels)
-    return page("Configurações",f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta.</p><button style='width:100%'>SALVAR</button></form>")
+
+    C=conf()
+    labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX",
+            "whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço",
+            "mensagem":"Mensagem do comprovante","taxa_entrega":"Taxa de entrega (R$)"}
+    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C.get(k,'')}'>" for k in labels)
+
+    modo=str(C.get("impressora","android") or "android")
+    larg=str(C.get("largura_papel","58"))
+    def selected(v): return "selected" if modo==v else ""
+    sel58="selected" if larg!="80" else ""
+    sel80="selected" if larg=="80" else ""
+
+    printer=f"""
+    <h3>🖨️ Impressora térmica</h3>
+    <label>Método de impressão</label>
+    <select name='impressora'>
+      <option value='android' {selected('android')}>Android padrão — recomendado e gratuito</option>
+      <option value='compartilhar' {selected('compartilhar')}>Compartilhar para aplicativo de impressão</option>
+      <option value='escpos' {selected('escpos')}>ESC/POS genérico</option>
+      <option value='usb' {selected('usb')}>USB / OTG via serviço Android</option>
+      <option value='wifi' {selected('wifi')}>Wi‑Fi / IP via serviço/plugin Android</option>
+      <option value='rawbt' {selected('rawbt')}>RawBT — opcional</option>
+      <option value='bluetooth_nativo' {selected('bluetooth_nativo')}>Bluetooth direto — futura versão Android nativa</option>
+    </select>
+
+    <label>Largura do papel</label>
+    <select name='largura_papel'>
+      <option value='58' {sel58}>58 mm — portátil mais comum</option>
+      <option value='80' {sel80}>80 mm — recibo largo</option>
+    </select>
+
+    <label>Nome/modelo da impressora</label>
+    <input name='impressora_nome' value='{C.get("impressora_nome","")}' placeholder='Ex.: KA-1445, XPrinter, Elgin, Epson...'>
+
+    <label>IP da impressora (opcional)</label>
+    <input name='impressora_ip' value='{C.get("impressora_ip","")}' placeholder='Ex.: 192.168.1.50'>
+
+    <label>Porta ESC/POS (opcional)</label>
+    <input name='impressora_porta' value='{C.get("impressora_porta","9100")}' inputmode='numeric'>
+
+    <div class=box style='margin-top:12px'>
+      <b>Compatibilidade</b>
+      <p class=muted>Android padrão, compartilhamento, ESC/POS, USB/OTG, Wi‑Fi/IP e RawBT opcional.</p>
+      <p class=muted>Bluetooth direto pelo navegador não é universal; use RawBT/serviço Android ou uma futura versão nativa.</p>
+    </div>
+
+    <a class=btn href='/teste'>🧾 TESTAR IMPRESSORA</a>
+    """
+    return page("Configurações",
+        f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}{printer}"
+        f"<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'>"
+        f"<p class=muted>Usada no comprovante e etiqueta.</p>"
+        f"<button style='width:100%'>SALVAR</button></form>")
 
 @app.route("/teste")
 def teste():
-    return """<!doctype html><meta name=viewport content='width=device-width'><style>body{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}button{width:100%;padding:12px}@media print{button{display:none}}</style><h2>BRECHÓ GETRES</h2><p>TESTE 58 mm<br>RawBT / KA-1445</p><p>------------------------------</p><p>Se tudo sair completo,<br>a largura está correta.</p><button onclick=print()>IMPRIMIR</button>"""
-
+    C=conf(); largura=largura_impressao_mm(C)
+    texto=(f"BRECHÓ GETRES\\nTESTE DE IMPRESSÃO\\n"
+           f"Método: {C.get('impressora','android')}\\n"
+           f"Papel: {C.get('largura_papel','58')} mm\\n"
+           f"Modelo: {C.get('impressora_nome','')}\\n"
+           f"ABCDEFGHIJKLMNOPQRSTUVWXYZ\\n0123456789\\n"
+           f"Se este texto saiu completo, a largura está correta.")
+    botoes=botoes_impressao(texto)
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
+    <style>
+    @page{{size:{largura}mm auto;margin:0}}
+    *{{box-sizing:border-box}}
+    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;text-align:center;font:12px monospace;color:#000;background:#fff}}
+    button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}.acoes-impressao{{margin-top:8px}}
+    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
+    </style></head><body>
+    <h2>BRECHÓ GETRES</h2>
+    <p>TESTE TÉRMICO {C.get('largura_papel','58')} mm</p>
+    <p>Método: {C.get('impressora','android')}</p>
+    <p>{C.get('impressora_nome','')}</p>
+    <p>------------------------------</p>
+    <p>ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>0123456789</p>
+    <p>Se tudo sair completo,<br>a largura está correta.</p>
+    {botoes}</body></html>"""
 
 @app.route("/manifest.json")
 def manifest():
