@@ -1,14 +1,15 @@
-# BRECHO G3 - instalador de versao inicial
+# BRECHÓ GETRES — BASE APP7 CONSOLIDADA — SUPABASE + OFFLINE FINAL 2026-08-23
 # Execute: python app.py
-import os, sqlite3, json, secrets, re, unicodedata, io, base64
+import os, json, secrets, re, unicodedata, io, base64
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from urllib.parse import quote_plus
-from flask import Flask, request, redirect, session, render_template_string
+from flask import Flask, request, redirect, session, render_template_string, Response, send_file, abort
 
 app=Flask(__name__)
 app.secret_key=os.environ.get("SECRET_KEY","brecho-g3-2026")
-DB="brechog3.db"
-os.makedirs("static/produtos",exist_ok=True)
+DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
 
 
 
@@ -49,18 +50,18 @@ def qr_data_uri(text):
         return ""
 
 CSS="""
-*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#000;color:#fff;font-family:Arial,sans-serif}body{font-size:17px}.app{width:100%;max-width:760px;min-height:100dvh;margin:auto;background:#000}header{padding:28px 16px 20px;text-align:center;border-bottom:1px solid #8a6422}.brandline{display:flex;justify-content:center;align-items:center;gap:12px}.brandicon{font-size:42px;color:#e7a92d}.logo{color:#e7a92d;font-size:34px;font-weight:900}.sub{font-size:13px;margin-top:7px;text-transform:uppercase}main{padding:22px 16px 38px}.box{background:linear-gradient(145deg,#171717,#090909);border:1px solid #8a6422;border-radius:22px;padding:20px;margin-bottom:16px}h2{font-size:27px}input,select,textarea{width:100%;padding:15px;margin:6px 0 12px;background:#1b1b1b;color:#fff;border:1px solid #66502a;border-radius:14px;font-size:16px}button,.btn{background:#e7a92d;color:#090909;border:0;border-radius:14px;padding:14px 16px;font-weight:bold;text-decoration:none;display:inline-block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{overflow:hidden;background:#141414;border:1px solid #6e5223;border-radius:19px}.card img,.pic{width:100%;aspect-ratio:1;object-fit:cover}.pic{display:grid;place-items:center;font-size:62px;background:#222}.pad{padding:14px}.price{color:#e9bd50;font-weight:bold;font-size:21px}.muted{color:#d0d0d0;font-size:14px}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.danger{background:#6d1c1c;color:#fff}
+*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#000;color:#fff;font-family:Arial,sans-serif}body{font-size:22px}.app{width:100%;max-width:760px;min-height:100dvh;margin:auto;background:#000}header{padding:28px 16px 20px;text-align:center;border-bottom:1px solid #8a6422}.brandline{display:flex;justify-content:center;align-items:center;gap:12px}.brandicon{font-size:42px;color:#e7a92d}.logo{color:#e7a92d;font-size:34px;font-weight:900}.sub{font-size:15px;margin-top:7px;text-transform:uppercase}main{padding:22px 16px 38px}.box{background:linear-gradient(145deg,#171717,#090909);border:1px solid #8a6422;border-radius:22px;padding:20px;margin-bottom:16px}h2{font-size:36px}input,select,textarea{width:100%;padding:15px;margin:6px 0 12px;background:#1b1b1b;color:#fff;border:1px solid #66502a;border-radius:14px;font-size:18px}button,.btn{background:#e7a92d;color:#090909;border:0;border-radius:14px;padding:16px 18px;font-size:19px;font-weight:900;text-decoration:none;display:inline-block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{overflow:hidden;background:#141414;border:1px solid #6e5223;border-radius:19px}.card img,.pic{width:100%;aspect-ratio:1;object-fit:cover}.pic{display:grid;place-items:center;font-size:62px;background:#222}.pad{padding:14px}.price{color:#e9bd50;font-weight:900;font-size:31px;line-height:1.15;margin-top:4px}.muted{color:#f0f0f0;font-size:19px;line-height:1.45;font-weight:600}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.danger{background:#6d1c1c;color:#fff}
 .voltar-bar{margin-bottom:18px}
-.voltar-btn{display:inline-flex;align-items:center;gap:10px;background:#171717;color:#e7a92d;border:1px solid #a87920;border-radius:16px;padding:14px 20px;font-size:18px;font-weight:900;text-decoration:none}
+.voltar-btn{display:inline-flex;align-items:center;gap:10px;background:#171717;color:#e7a92d;border:1px solid #a87920;border-radius:16px;padding:16px 24px;font-size:22px;font-weight:900;text-decoration:none}
 .foto-editor{margin:16px 0 20px;padding:16px;border:1px solid #8a6422;border-radius:18px;background:#0d0d0d;text-align:center}
 .foto-preview{width:100%;max-height:360px;object-fit:contain;border-radius:15px;background:#181818;display:none;margin-bottom:14px}
 .foto-preview.show{display:block}
 .foto-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .foto-actions label,.foto-actions button{width:100%;margin:0;text-align:center;cursor:pointer}
 .file-hidden{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
-.prod-thumb{width:92px;height:92px;object-fit:cover;border-radius:14px;border:1px solid #8a6422;background:#222}
+.prod-thumb{width:124px;height:124px;object-fit:cover;border-radius:14px;border:1px solid #8a6422;background:#222}
 .prod-info{display:flex;align-items:center;gap:14px;min-width:0}
-.prod-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ver-fotos{width:100%;text-align:center;margin-top:10px}
+.prod-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.prod-actions .btn{font-size:18px;padding:15px 17px}.ver-fotos{width:100%;text-align:center;margin-top:10px}
 .galeria-produto{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .galeria-produto .card img{width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer}
 .foto-grande{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.96);display:none;align-items:center;justify-content:center;padding:18px}
@@ -70,25 +71,88 @@ CSS="""
 .foto-nav{position:absolute;top:50%;transform:translateY(-50%);font-size:34px;padding:14px 18px}
 .foto-ant{left:8px}.foto-prox{right:8px}
 .foto-contador{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-weight:bold}
-@media(max-width:480px){.foto-actions{grid-template-columns:1fr}.prod-thumb{width:82px;height:82px}}
+@media(max-width:480px){.foto-actions{grid-template-columns:1fr}.prod-thumb{width:112px;height:112px}.prod-info{align-items:flex-start}.prod-actions .btn{font-size:17px;padding:14px 15px}.price{font-size:29px}.muted{font-size:18px}h2{font-size:34px}}
 .menu-grid{display:flex;flex-direction:column;gap:14px}.menu-card{min-height:168px;padding:24px 22px;display:flex;align-items:center;gap:22px;color:#fff;text-decoration:none;background:linear-gradient(145deg,#171717,#090909);border:1px solid #a87920;border-radius:22px}.menu-icon{width:104px;flex:0 0 104px;text-align:center;color:#e7a92d;font-size:72px;line-height:1}.menu-copy{flex:1}.menu-title{font-size:34px;font-weight:900;margin-bottom:10px}.menu-desc{font-size:20px;color:#d0d0d0;line-height:1.25}.menu-arrow{font-size:58px;color:#e7a92d;font-weight:900}.menu-badge{background:#e7a92d;color:#090909;border-radius:50%;min-width:52px;height:52px;display:grid;place-items:center;font-size:22px;font-weight:900}.diferenciais{margin-top:32px;padding:30px 12px;border-top:2px solid #8a6422;text-align:center;color:#fff;font-size:31px;font-weight:900;line-height:1.55;letter-spacing:.2px}.diferenciais b{color:#e7a92d;font-size:36px}
 #splash{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .55s}#splash.hide{opacity:0;pointer-events:none}.splash-inner{text-align:center;padding:28px}.splash-mark{font-size:110px;line-height:1;color:#e7a92d;text-shadow:0 0 28px rgba(231,169,45,.4)}.splash-g3{font-size:80px;font-weight:900;color:#e7a92d;line-height:.9;margin-top:-18px}.splash-name{font-size:39px;font-weight:900;color:#e7a92d;margin-top:30px}.splash-sub{font-size:15px;line-height:1.5;margin-top:12px;text-transform:uppercase}.loader{width:42px;height:42px;border:4px solid #3b2c10;border-top-color:#e7a92d;border-radius:50%;margin:55px auto 14px;animation:spin .85s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:480px){.logo{font-size:28px}.brandicon{font-size:34px}.sub{font-size:11px}main{padding:18px 12px 30px}.menu-card{min-height:148px;padding:20px 16px;gap:16px}.menu-icon{width:88px;flex-basis:88px;font-size:62px}.menu-title{font-size:29px}.menu-desc{font-size:17px}.menu-arrow{font-size:48px}.splash-mark{font-size:90px}.splash-g3{font-size:66px}.splash-name{font-size:33px}}
+/* LEITURA GRANDE - BRECHÓ GETRES */
+.prod-info b{font-size:29px!important;line-height:1.2;font-weight:900!important}
+.prod-info .muted{font-size:19px!important;line-height:1.4}
+.prod-info .price{font-size:31px!important}
+.prod-actions .btn{font-size:18px!important;font-weight:900!important}
+@media(max-width:480px){
+  .prod-info b{font-size:27px!important}
+  .prod-info .muted{font-size:18px!important}
+  .prod-info .price{font-size:29px!important}
+  .prod-actions .btn{font-size:17px!important}
+}
+
 """
 
+class PGCursor:
+    def __init__(self, cur, lastrowid=None):
+        self.cur=cur
+        self.lastrowid=lastrowid
+    def fetchone(self): return self.cur.fetchone()
+    def fetchall(self): return self.cur.fetchall()
+    def __iter__(self): return iter(self.cur)
+
+class PGConn:
+    def __init__(self, raw): self.raw=raw
+    def execute(self, sql, params=()):
+        q=sql.strip().replace("?", "%s")
+        cur=self.raw.cursor(cursor_factory=RealDictCursor)
+        wants_id=bool(re.match(r"^\s*INSERT\s+INTO\s+(produtos|vendas)\b", q, re.I)) and " RETURNING " not in q.upper()
+        if wants_id: q=q.rstrip().rstrip(';')+" RETURNING id"
+        cur.execute(q, params or ())
+        last=None
+        if wants_id:
+            row=cur.fetchone(); last=row["id"] if row else None
+        return PGCursor(cur,last)
+    def commit(self): self.raw.commit()
+    def rollback(self): self.raw.rollback()
+    def close(self): self.raw.close()
+
 def db():
-    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL do Supabase não está configurada no Render.")
+    return PGConn(psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require")))
 
 def init():
     c=db()
-    c.executescript("""CREATE TABLE IF NOT EXISTS produtos(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,preco REAL,estoque INTEGER,imagem TEXT,descricao TEXT);
-CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
-CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
-    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
-        try: c.execute(sql)
-        except sqlite3.OperationalError: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS produtos(
+        id BIGSERIAL PRIMARY KEY,
+        nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,
+        preco DOUBLE PRECISION,estoque INTEGER,imagem TEXT,descricao TEXT,
+        ativo INTEGER DEFAULT 1,offline_id TEXT
+    )""")
+    c.execute("CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT)")
+    c.execute("""CREATE TABLE IF NOT EXISTS fotos(
+        id BIGSERIAL PRIMARY KEY,produto_id BIGINT,arquivo TEXT,principal INTEGER DEFAULT 0,
+        dados BYTEA,mime TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS vendas(
+        id BIGSERIAL PRIMARY KEY,data TEXT,total DOUBLE PRECISION,pagamento TEXT,itens TEXT,
+        tipo_entrega TEXT DEFAULT 'retirada',taxa_entrega DOUBLE PRECISION DEFAULT 0,
+        status TEXT DEFAULT 'ATIVO',estoque_devolvido INTEGER DEFAULT 0,
+        offline_id TEXT,estoque_baixado INTEGER DEFAULT 0
+    )""")
+    # Migrações seguras: nunca apagam dados já existentes no Supabase.
+    for sql in [
+        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo INTEGER DEFAULT 1",
+        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS offline_id TEXT",
+        "ALTER TABLE fotos ADD COLUMN IF NOT EXISTS dados BYTEA",
+        "ALTER TABLE fotos ADD COLUMN IF NOT EXISTS mime TEXT",
+        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'retirada'",
+        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DOUBLE PRECISION DEFAULT 0",
+        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'",
+        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS estoque_devolvido INTEGER DEFAULT 0",
+        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS offline_id TEXT",
+        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS estoque_baixado INTEGER DEFAULT 0"
+    ]: c.execute(sql)
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
     for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
-        c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
+        c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO NOTHING",(k,v))
     c.commit(); c.close()
 
 def migrar_nome_getres():
@@ -102,22 +166,26 @@ def migrar_nome_getres():
 def conf():
     c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close(); return d
 
+def logo_data_uri():
+    """Retorna a logo persistida no Supabase em data URI."""
+    salvo=str(conf().get("logo","") or "").strip()
+    return salvo if salvo.startswith("data:image/") else ""
+
 @app.route("/logo-getres")
 def logo_getres():
-    from flask import send_file, abort
-    C=conf()
-    salvo=str(C.get("logo","") or "").strip()
-    if not salvo:
+    uri=logo_data_uri()
+    if not uri: abort(404)
+    try:
+        cab,b64=uri.split(",",1); mime=cab.split(";",1)[0].split(":",1)[1]
+        return Response(base64.b64decode(b64),mimetype=mime,headers={"Cache-Control":"public, max-age=86400"})
+    except Exception:
         abort(404)
-    candidatos=[
-        salvo,
-        os.path.join("static", salvo),
-        os.path.join("static", os.path.basename(salvo)),
-    ]
-    for caminho in candidatos:
-        if os.path.isfile(caminho):
-            return send_file(os.path.abspath(caminho), max_age=0)
-    abort(404)
+
+@app.route("/foto-arquivo/<path:arquivo>")
+def foto_arquivo(arquivo):
+    c=db(); r=c.execute("SELECT dados,mime FROM fotos WHERE arquivo=? AND dados IS NOT NULL ORDER BY principal DESC,id DESC LIMIT 1",(arquivo,)).fetchone(); c.close()
+    if not r or r.get("dados") is None: abort(404)
+    return Response(bytes(r["dados"]),mimetype=r.get("mime") or "image/jpeg",headers={"Cache-Control":"public, max-age=31536000, immutable"})
 
 def page(title,body,nav=True):
     C=conf()
@@ -125,8 +193,74 @@ def page(title,body,nav=True):
     if path != "/":
         destino="/?menu=1"
         body=f"<div class=voltar-bar><a class=voltar-btn href='{destino}'>← VOLTAR</a></div>"+body
-    logo_header=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo BRECHÓ GETRES' style='width:42px;height:42px;object-fit:contain;display:block'>" if C.get("logo") else "<span class=brandicon>♧</span>")
-    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
+    logo_uri=logo_data_uri()
+    logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
+    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{})}
+function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
+function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
+function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
+function setOfflineHistory(h){localStorage.setItem("getres_offline_history",JSON.stringify(h))}
+function getOfflineProducts(){try{return JSON.parse(localStorage.getItem("getres_offline_products")||"[]")}catch(e){return []}}
+function setOfflineProducts(q){localStorage.setItem("getres_offline_products",JSON.stringify(q))}
+async function fileDataURL(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)})}
+async function syncOfflineProducts(){
+  if(!navigator.onLine)return; let q=getOfflineProducts(); if(!q.length)return; const rest=[];
+  for(const p of q){try{const r=await fetch('/sync-offline-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});const d=await r.json();if(!(r.ok&&d.ok)){p.last_error=d.erro||'Falha ao sincronizar produto';rest.push(p)}}catch(e){rest.push(p)}}
+  setOfflineProducts(rest); if(!rest.length)refreshOfflineCatalog();
+}
+function saveOfflineHistory(sale,status,serverId,erro){
+  let h=getOfflineHistory();
+  const i=h.findIndex(x=>x.offline_id===sale.offline_id);
+  const item={...sale,local_status:status||sale.local_status||"PENDENTE",server_id:serverId||sale.server_id||null,last_error:erro||sale.last_error||""};
+  if(i>=0)h[i]=item;else h.unshift(item);
+  setOfflineHistory(h.slice(0,100));
+}
+function showNetStatus(){
+  const el=document.getElementById("netStatus"); if(!el)return;
+  const q=getOfflineQueue();
+  if(!navigator.onLine){
+    el.style.display="block";el.style.background="#7a1f1f";el.style.color="#fff";
+    el.textContent="OFFLINE • "+q.length+" pedido(s) aguardando sincronização";
+  }else if(q.length){
+    el.style.display="block";el.style.background="#7a5a12";el.style.color="#fff";
+    el.textContent="ONLINE • sincronizando "+q.length+" pedido(s)...";
+  }else{el.style.display="none"}
+}
+async function refreshOfflineCatalog(){
+  if(!navigator.onLine)return;
+  try{
+    const r=await fetch("/offline/catalogo",{cache:"no-store"});
+    if(r.ok)localStorage.setItem("getres_catalogo",JSON.stringify(await r.json()));
+  }catch(e){}
+}
+async function syncOfflineSales(){
+  if(!navigator.onLine)return;
+  let q=getOfflineQueue(); if(!q.length){showNetStatus();return}
+  const rest=[];
+  for(const sale of q){
+    try{
+      const r=await fetch("/sync-offline-sale",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(sale)});
+      const d=await r.json();
+      if(r.ok && d.ok){
+        saveOfflineHistory(sale,"SINCRONIZADO",d.id||null,"");
+      }else{
+        sale.last_error=d.erro||"Falha ao sincronizar";rest.push(sale);
+        saveOfflineHistory(sale,"PENDENTE",null,sale.last_error);
+      }
+    }catch(e){
+      rest.push(sale);
+      saveOfflineHistory(sale,"PENDENTE",null,sale.last_error||"");
+    }
+  }
+  setOfflineQueue(rest);showNetStatus();
+  if(typeof renderPedidosOffline==="function")renderPedidosOffline();
+  if(rest.length===0)refreshOfflineCatalog();
+}
+window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales()});
+window.addEventListener("offline",showNetStatus);
+document.addEventListener("DOMContentLoaded",()=>{showNetStatus();refreshOfflineCatalog();syncOfflineProducts();syncOfflineSales()});
+</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
 def home():
@@ -167,10 +301,69 @@ def destaques():
     c=db(); rows=c.execute("SELECT * FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall(); c.close()
     cards=""
     for r in rows:
-        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/static/produtos/"+r["imagem"]+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
+        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/foto-arquivo/"+r["imagem"]+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
         cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
-    if not cards: cards="<div class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
-    return page("Início","<h2>Destaques</h2><div class=grid>"+cards+"</div><br><a class=btn href='/'>← MENU PRINCIPAL</a>")
+    if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
+    offline_js=r"""
+<script>
+(function(){
+  const grid=document.querySelector('.grid');
+  if(!grid)return;
+
+  function getCatalogo(){
+    try{return JSON.parse(localStorage.getItem('getres_catalogo')||'[]')}catch(e){return []}
+  }
+  function getPendentes(){
+    try{return JSON.parse(localStorage.getItem('getres_offline_products')||'[]')}catch(e){return []}
+  }
+  function esc(v){
+    return String(v==null?'':v).replace(/[&<>"']/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function fotoProduto(p){
+    if(p.imagens && p.imagens.length && p.imagens[0]) return p.imagens[0];
+    if(p.imagem){
+      if(String(p.imagem).startsWith('data:') || String(p.imagem).startsWith('/')) return p.imagem;
+      return '/foto-arquivo/'+p.imagem;
+    }
+    return '';
+  }
+  function card(p,pendente){
+    const foto=fotoProduto(p);
+    const preco=Number(p.preco||0).toFixed(2);
+    const img=foto ? `<img src="${esc(foto)}" alt="Produto">` : `<div class="pic">👕</div>`;
+    const id=Number(p.id||0);
+    const carrinho=id ? `<button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push(${id});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button>` : '';
+    return `<div class="card">${img}<div class="pad"><b>${esc(p.nome||'Blusa')}</b>
+      <div class="muted">${esc(p.tamanho||'')} • ${esc(p.estado||'')} • estoque ${esc(p.estoque||0)}</div>
+      <div class="price">R$ ${preco}</div>${pendente?'<div class="muted">⏳ Aguardando sincronização</div>':carrinho}</div></div>`;
+  }
+
+  const servidorTemProdutos = grid.querySelector('.card');
+  const vazio=document.getElementById('destaquesVazio');
+  const pendentes=getPendentes();
+
+  if(servidorTemProdutos){
+    if(pendentes.length) grid.insertAdjacentHTML('beforeend',pendentes.map(p=>card(p,true)).join(''));
+    return;
+  }
+
+  const catalogo=getCatalogo();
+  const todos=[...pendentes];
+  const vistos=new Set(pendentes.map(p=>String(p.offline_id||p.id||'')));
+  catalogo.forEach(p=>{
+    const k=String(p.offline_id||p.id||'');
+    if(!vistos.has(k)) todos.push(p);
+  });
+
+  if(todos.length){
+    if(vazio)vazio.remove();
+    grid.innerHTML=todos.map(p=>card(p,!!p.offline_id && !p.id)).join('');
+  }
+})();
+</script>"""
+    return page("Início","<h2>Destaques</h2><div class=grid>"+cards+"</div><br><a class=btn href='/'>← MENU PRINCIPAL</a>"+offline_js)
 
 @app.route("/produtos")
 def produtos():
@@ -179,9 +372,9 @@ def produtos():
     if not rows:
         x+="<div class=box>Nenhuma blusa cadastrada.</div>"
     for r in rows:
-        foto=f"<img class=prod-thumb src='/static/produtos/{r['imagem']}'>" if r["imagem"] else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
+        foto=f"<img class=prod-thumb src='/foto-arquivo/{r['imagem']}'>" if r["imagem"] else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
         x+=f"""<div class=box>
-        <div class=prod-info>{foto}<div><b style='font-size:21px'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
+        <div class=prod-info>{foto}<div><b style='font-size:29px;line-height:1.2;font-weight:900'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
         <div class=prod-actions>
         <a class=btn href='/editar/{r['id']}'>✏️ DIGITAR / EDITAR</a>
         <a class=btn href='/fotos/{r['id']}'>📷 ADICIONAR FOTOS</a>
@@ -190,13 +383,14 @@ def produtos():
         {("<a class='btn danger' href='/desativar/"+str(r['id'])+"'>⛔ DESATIVAR</a>" if int(r["ativo"] if r["ativo"] is not None else 1)==1 else "<a class='btn' href='/reativar/"+str(r['id'])+"'>♻️ REATIVAR</a>")}
         <a class='btn danger' href='/excluir/{r['id']}' onclick="return confirm('Excluir definitivamente? Se já houve venda, será apenas desativado.')">🗑️ EXCLUIR</a>
         </div></div>"""
-    x+="<a class=btn href='/'>← MENU PRINCIPAL</a>"
+    x+="<div id=produtosOffline></div><a class=btn href='/'>← MENU PRINCIPAL</a>"
+    x+="""<script>(function(){const el=document.getElementById('produtosOffline'),q=getOfflineProducts();if(!el||!q.length)return;el.innerHTML='<h3>📴 Produtos aguardando sincronização</h3>'+q.map(p=>`<div class=box><b>${p.nome}</b><div class=muted>${p.time_nome||''} • ${p.tamanho||''}</div><div class=price>R$ ${Number(p.preco||0).toFixed(2)}</div><div class=muted>⏳ Salvo neste celular</div></div>`).join('')})();</script>"""
     return page("Produtos",x)
 
 def form_prod(r=None):
     def v(k): return str(r[k] or "") if r else ""
     atual=v("imagem")
-    atual_src=f"/static/produtos/{atual}" if atual else ""
+    atual_src=f"/foto-arquivo/{atual}" if atual else ""
     show=" show" if atual else ""
     return f"""<h2>{'✏️ Editar blusa' if r else '👕 Cadastrar blusa'}</h2>
 <form method=post enctype=multipart/form-data class=box id=produtoForm>
@@ -228,6 +422,14 @@ def form_prod(r=None):
 const fi=document.getElementById('imagemInput'), pv=document.getElementById('preview'), sf=document.getElementById('semFoto'), rm=document.getElementById('removerImagem');
 fi.addEventListener('change',()=>{{let fs=[...(fi.files||[])];if(fs.length>6){{alert('Escolha no máximo 6 fotos.');fi.value='';return}};let mp=document.getElementById('multiPreview');mp.innerHTML='';fs.forEach(f=>{{let im=document.createElement('img');im.src=URL.createObjectURL(f);im.style='width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px';mp.appendChild(im)}});if(fs[0]){{pv.src=URL.createObjectURL(fs[0]);pv.classList.add('show');sf.style.display='none';rm.value='0'}}}});
 function excluirPreview(){{fi.value='';pv.removeAttribute('src');pv.classList.remove('show');sf.style.display='block';rm.value='1'}}
+document.getElementById('produtoForm').addEventListener('submit',async function(ev){{
+ if(navigator.onLine)return;
+ ev.preventDefault();
+ const fd=new FormData(this), fotos=[...(fi.files||[])].slice(0,6), imagens=[];
+ for(const f of fotos) imagens.push(await fileDataURL(f));
+ const p={{offline_id:'prod-'+Date.now()+'-'+Math.random().toString(16).slice(2),nome:fd.get('nome')||'',time_nome:fd.get('time_nome')||'',categoria:fd.get('categoria')||'',tamanho:fd.get('tamanho')||'',estado:fd.get('estado')||'',preco:Number(String(fd.get('preco')||'0').replace(',','.')),estoque:Number(fd.get('estoque')||0),descricao:fd.get('descricao')||'',imagens:imagens,criado_em:new Date().toISOString()}};
+ let q=getOfflineProducts();q.unshift(p);setOfflineProducts(q);alert('Produto e fotos salvos OFFLINE. Serão sincronizados quando a internet voltar.');location='/produtos';
+}});
 </script>"""
 
 @app.route("/novo",methods=["GET","POST"])
@@ -235,33 +437,30 @@ function excluirPreview(){{fi.value='';pv.removeAttribute('src');pv.classList.re
 def produto_form(pid=None):
     c=db(); r=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone() if pid else None
     if request.method=="POST":
-        img=r["imagem"] if r else ""
-        old_img=img
+        img=r["imagem"] if r else ""; old_img=img
         if request.form.get("remover_imagem")=="1":
             img=""
-            if old_img:
-                try: os.remove("static/produtos/"+old_img)
-                except OSError: pass
+            if old_img: c.execute("DELETE FROM fotos WHERE produto_id=? AND arquivo=?",(pid,old_img))
         novos=[f for f in request.files.getlist("imagem")[:6] if f and f.filename]
-        arquivos_novos=[]
+        novos_dados=[]
         for f in novos:
             ext=os.path.splitext(f.filename)[1].lower() or ".jpg"
-            arq=secrets.token_hex(8)+ext
-            f.save("static/produtos/"+arq)
-            arquivos_novos.append(arq)
-        if arquivos_novos: img=arquivos_novos[0]
+            arq=secrets.token_hex(10)+ext; dados=f.read(); mime=f.mimetype or "image/jpeg"
+            if dados: novos_dados.append((arq,dados,mime))
+        if novos_dados: img=novos_dados[0][0]
         vals=(request.form["nome"],request.form.get("time_nome",""),request.form.get("categoria",""),request.form.get("tamanho",""),request.form.get("estado",""),float(request.form.get("preco","0").replace(",",".")),int(request.form.get("estoque","0")),img,request.form.get("descricao",""))
         if pid:
-            c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,imagem=?,descricao=? WHERE id=?",vals+(pid,))
-            produto_id=pid
+            c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,imagem=?,descricao=? WHERE id=?",vals+(pid,)); produto_id=pid
         else:
-            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals)
-            produto_id=cur.lastrowid
-        if arquivos_novos:
-            c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
-            existentes=c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(produto_id,)).fetchone()["n"]
-            for i,arq in enumerate(arquivos_novos[:max(0,6-existentes)]):
-                c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(produto_id,arq,1 if i==0 else 0))
+            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals); produto_id=cur.lastrowid
+        if novos_dados:
+            existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(produto_id,)).fetchone()["n"] or 0)
+            vagas=max(0,6-existentes)
+            if vagas:
+                c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
+                for i,(arq,dados,mime) in enumerate(novos_dados[:vagas]):
+                    c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(produto_id,arq,1 if i==0 else 0,psycopg2.Binary(dados),mime))
+                c.execute("UPDATE produtos SET imagem=? WHERE id=?",(novos_dados[0][0],produto_id))
         c.commit();c.close();return redirect("/produtos")
     out=page("Produto",form_prod(r));c.close();return out
 
@@ -282,15 +481,6 @@ def excluir(pid):
         except Exception: pass
     if usado:
         c.execute("UPDATE produtos SET ativo=0 WHERE id=?",(pid,)); c.commit(); c.close(); return redirect("/produtos")
-    p=c.execute("SELECT imagem FROM produtos WHERE id=?",(pid,)).fetchone()
-    fotos_rows=c.execute("SELECT arquivo FROM fotos WHERE produto_id=?",(pid,)).fetchall()
-    arquivos=set()
-    if p and p["imagem"]: arquivos.add(p["imagem"])
-    for f in fotos_rows:
-        if f["arquivo"]: arquivos.add(f["arquivo"])
-    for arq in arquivos:
-        try: os.remove("static/produtos/"+arq)
-        except OSError: pass
     c.execute("DELETE FROM fotos WHERE produto_id=?",(pid,)); c.execute("DELETE FROM produtos WHERE id=?",(pid,))
     c.commit(); c.close(); return redirect("/produtos")
 
@@ -316,10 +506,10 @@ def galeria(pid):
         return page("Fotos",f"<h2>📸 {p['nome']}</h2><div class=box>Nenhuma foto cadastrada para esta blusa.</div>")
 
     thumbs="".join(
-        f"<div class=card><img src='/static/produtos/{arq}' onclick='abrirFoto({i})' alt='Foto {i+1}'></div>"
+        f"<div class=card><img src='/foto-arquivo/{arq}' onclick='abrirFoto({i})' alt='Foto {i+1}'></div>"
         for i,arq in enumerate(arquivos)
     )
-    js_arquivos=json.dumps(["/static/produtos/"+a for a in arquivos],ensure_ascii=False)
+    js_arquivos=json.dumps(["/foto-arquivo/"+a for a in arquivos],ensure_ascii=False)
     body=f"""<h2>📸 {p['nome']}</h2>
     <div class=box><b>{len(arquivos)} {'foto' if len(arquivos)==1 else 'fotos'}</b>
     <div class=muted>Toque em uma imagem para visualizar em tamanho grande.</div></div>
@@ -351,60 +541,31 @@ def fotos(pid):
     if not p: c.close(); return "Produto não encontrado",404
     if request.method=="POST":
         fs=[f for f in request.files.getlist("fotos") if f and f.filename]
-        existentes=c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(pid,)).fetchone()["n"]
-        vagas=max(0,6-existentes)
+        existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(pid,)).fetchone()["n"] or 0); vagas=max(0,6-existentes)
         for f in fs[:vagas]:
-            ext=os.path.splitext(f.filename)[1].lower() or ".jpg"
-            arq=secrets.token_hex(10)+ext
-            f.save("static/produtos/"+arq)
-            tem=c.execute("SELECT 1 FROM fotos WHERE produto_id=?",(pid,)).fetchone()
-            c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(pid,arq,0 if tem else 1))
+            ext=os.path.splitext(f.filename)[1].lower() or ".jpg"; arq=secrets.token_hex(10)+ext; dados=f.read(); mime=f.mimetype or "image/jpeg"
+            if not dados: continue
+            tem=c.execute("SELECT 1 FROM fotos WHERE produto_id=?",(pid,)).fetchone(); principal=0 if tem else 1
+            c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,arq,principal,psycopg2.Binary(dados),mime))
+            if principal: c.execute("UPDATE produtos SET imagem=? WHERE id=?",(arq,pid))
         c.commit(); c.close(); return redirect("/fotos/"+str(pid))
-    rows=c.execute("SELECT * FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
+    rows=c.execute("SELECT id,produto_id,arquivo,principal FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
     cards=""
     for f in rows:
-        cards+=f"""<div class=card><img src='/static/produtos/{f["arquivo"]}'><div class=pad>
+        cards+=f"""<div class=card><img src='/foto-arquivo/{f["arquivo"]}'><div class=pad>
         {'<b>⭐ Principal</b><br>' if f["principal"] else ''}
         <a class=btn href='/foto-principal/{pid}/{f["id"]}'>⭐ Principal</a>
         <a class='btn danger' href='/foto-excluir/{pid}/{f["id"]}'>🗑 Excluir</a></div></div>"""
     body=f"""<h2>📸 Fotos • G3-{pid:05d}</h2>
-    <form method=post enctype=multipart/form-data class=box id=fotosForm>
-    <label>➕ Adicionar fotos</label>
-
+    <form method=post enctype=multipart/form-data class=box id=fotosForm><label>➕ Adicionar fotos</label>
     <input class=file-hidden id=cameraFotos type=file name=fotos accept='image/*' capture='environment'>
     <input class=file-hidden id=galeriaFotos type=file name=fotos accept='image/*' multiple>
-
-    <div class=foto-actions>
-      <label class=btn for=cameraFotos>📷 TIRAR FOTO</label>
-      <label class=btn for=galeriaFotos>🖼️ ESCOLHER DA GALERIA</label>
-    </div>
-
-    <div id=selecionadas class=muted style='padding:16px 4px;text-align:center'>
-      Nenhuma nova foto selecionada.
-    </div>
-
+    <div class=foto-actions><label class=btn for=cameraFotos>📷 TIRAR FOTO</label><label class=btn for=galeriaFotos>🖼️ ESCOLHER DA GALERIA</label></div>
+    <div id=selecionadas class=muted style='padding:16px 4px;text-align:center'>Nenhuma nova foto selecionada.</div>
     <p class=muted>Você pode manter até 6 fotos por produto. Tire uma foto ou selecione várias imagens da galeria; as fotos já salvas não serão apagadas.</p>
-    <button id=adicionarFotos type=submit style='width:100%' disabled>➕ ADICIONAR FOTOS</button>
-    </form>
-
+    <button id=adicionarFotos type=submit style='width:100%' disabled>➕ ADICIONAR FOTOS</button></form>
     <div class=grid>{cards or '<div class=box>Nenhuma foto adicional.</div>'}</div>
-
-    <script>
-    const cam=document.getElementById('cameraFotos');
-    const gal=document.getElementById('galeriaFotos');
-    const info=document.getElementById('selecionadas');
-    const botao=document.getElementById('adicionarFotos');
-
-    function atualizarSelecao(input) {{
-      const n=input.files ? input.files.length : 0;
-      if(n>0) {{
-        info.textContent = n===1 ? '1 nova foto selecionada.' : n+' novas fotos selecionadas.';
-        botao.disabled=false;
-      }}
-    }}
-    cam.addEventListener('change',()=>atualizarSelecao(cam));
-    gal.addEventListener('change',()=>atualizarSelecao(gal));
-    </script>"""
+    <script>const cam=document.getElementById('cameraFotos'),gal=document.getElementById('galeriaFotos'),info=document.getElementById('selecionadas'),botao=document.getElementById('adicionarFotos');function atualizarSelecao(input){{const n=input.files?input.files.length:0;if(n>0){{info.textContent=n===1?'1 nova foto selecionada.':n+' novas fotos selecionadas.';botao.disabled=false}}}}cam.addEventListener('change',()=>atualizarSelecao(cam));gal.addEventListener('change',()=>atualizarSelecao(gal));</script>"""
     return page("Fotos",body)
 
 @app.route("/foto-principal/<int:pid>/<int:fid>")
@@ -418,16 +579,13 @@ def foto_principal(pid,fid):
 
 @app.route("/foto-excluir/<int:pid>/<int:fid>")
 def foto_excluir(pid,fid):
-    c=db();f=c.execute("SELECT * FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
+    c=db();f=c.execute("SELECT id,arquivo,principal FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
     if f:
-        try: os.remove("static/produtos/"+f["arquivo"])
-        except: pass
         c.execute("DELETE FROM fotos WHERE id=?",(fid,))
         if f["principal"]:
-            n=c.execute("SELECT * FROM fotos WHERE produto_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
+            n=c.execute("SELECT id,arquivo FROM fotos WHERE produto_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
             if n:
-                c.execute("UPDATE fotos SET principal=1 WHERE id=?",(n["id"],))
-                c.execute("UPDATE produtos SET imagem=? WHERE id=?",(n["arquivo"],pid))
+                c.execute("UPDATE fotos SET principal=1 WHERE id=?",(n["id"],));c.execute("UPDATE produtos SET imagem=? WHERE id=?",(n["arquivo"],pid))
             else: c.execute("UPDATE produtos SET imagem='' WHERE id=?",(pid,))
     c.commit();c.close();return redirect("/fotos/"+str(pid))
 
@@ -437,12 +595,13 @@ def etiqueta(pid):
     if not p:return "Produto não encontrado",404
     codigo=f"GETRES-{pid:05d}"
     qr=qr_data_uri(codigo); C=conf()
-    logo=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block;margin:0 auto 2mm'>" if C.get("logo") else "")
+    logo_uri=logo_data_uri()
+    logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
     return f"""<!doctype html><meta name=viewport content='width=device-width'>
     <style>body{{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}}
     h1{{font-size:18px}}.preco{{font-size:23px;font-weight:bold}}img{{width:27mm;height:27mm}}
     button{{width:100%;padding:12px}}@media print{{button{{display:none}}}}</style>
-    <div style="text-align:center">{logo}<h1 style="margin:0 0 2mm">BRECHÓ GETRES</h1></div><b>{codigo}</b><hr>
+    <div style="display:flex;align-items:center;justify-content:center;gap:2mm;margin-bottom:2mm">{logo}<h1 style="margin:0;font-size:3.2mm;line-height:1;white-space:nowrap;max-width:38mm;margin-left:auto;margin-right:auto">BRECHÓ GETRES</h1></div><b>{codigo}</b><hr>
     <b>{p["nome"]}</b><p>{p["time_nome"]}<br>Tam: {p["tamanho"]} • {p["estado"]}</p>
     <div class=preco>R$ {p["preco"]:.2f}</div><img src='{qr}'><br><b>{codigo}</b>
     <button onclick=print()>🖨 IMPRIMIR ETIQUETA</button>"""
@@ -453,30 +612,139 @@ def carrinho():
     C=conf()
     try: taxa=float(str(C.get("taxa_entrega","0")).replace(",","."))
     except: taxa=0
-    return page("Carrinho",f"""<h2>Carrinho</h2>
+    html="""<h2>Carrinho</h2>
 <div id=itens class=box>Carregando...</div>
 <div class=box>
 <label>Como deseja receber?</label>
 <select id=entrega onchange=atualizarTotal()>
 <option value="retirada">Retirada no local — grátis</option>
-<option value="entrega">Entrega — taxa R$ {taxa:.2f}</option>
+<option value="entrega">Entrega — taxa R$ __TAXA__</option>
 </select>
 <div id=taxaInfo class=muted style="margin:8px 0 16px">Retirada no local: sem taxa.</div>
 <label>Pagamento</label>
 <select id=pag><option>PIX</option><option>Dinheiro</option><option>Débito</option><option>Crédito</option></select>
-<button style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
+<button id=btnFinalizar style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
+<div id=offlineInfo class=muted style="margin-top:12px"></div>
 </div>
 <script>
-let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega={taxa:.2f}, subtotal=0;
-fetch('/api-cart?ids='+ids.join(',')).then(x=>x.json()).then(d=>{{window.d=d;subtotal=d.reduce((s,x)=>s+x.preco,0);render(d)}});
-function render(d){{let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
-itens.innerHTML=d.map(x=>`<p>${{x.nome}} <b style="float:right">R$ ${{x.preco.toFixed(2)}}</b></p>`).join('')+
-`<hr><p>Subtotal <b style="float:right">R$ ${{subtotal.toFixed(2)}}</b></p>`+
-(taxa?`<p>Taxa de entrega <b style="float:right">R$ ${{taxa.toFixed(2)}}</b></p>`:'')+
-`<hr><b>Total: R$ ${{total.toFixed(2)}}</b>`}}
-function atualizarTotal(){{taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${{taxaEntrega.toFixed(2)}}`:'Retirada no local: sem taxa.';render(window.d||[])}}
-function fechar(){{if(!ids.length || !window.d || !window.d.length || subtotal<=0){{alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}}fetch('/vender',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0}})}}).then(x=>x.json()).then(x=>{{if(x.ok){{localStorage.removeItem('g3cart');location='/venda/'+x.id}}else alert(x.erro)}})}}
-</script>""")
+let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega=Number('__TAXA__'), subtotal=0;
+function catalogoLocal(){try{return JSON.parse(localStorage.getItem('getres_catalogo')||'[]')}catch(e){return []}}
+function dadosLocais(){
+  const cat=catalogoLocal(), mapa={}; cat.forEach(x=>mapa[x.id]=x);
+  return ids.map(i=>mapa[i]).filter(Boolean);
+}
+async function carregar(){
+  try{
+    const r=await fetch('/api-cart?ids='+ids.join(','),{cache:'no-store'});
+    if(!r.ok)throw new Error();
+    const d=await r.json();window.d=d;subtotal=d.reduce((a,x)=>a+Number(x.preco),0);render(d);
+  }catch(e){
+    const d=dadosLocais();window.d=d;subtotal=d.reduce((a,x)=>a+Number(x.preco),0);render(d);
+    offlineInfo.textContent='Modo offline: usando catálogo salvo neste celular.';
+  }
+}
+function render(d){
+  let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
+  itens.innerHTML=d.map(x=>`<p>${x.nome} <b style="float:right">R$ ${Number(x.preco).toFixed(2)}</b></p>`).join('')+
+  `<hr><p>Subtotal <b style="float:right">R$ ${subtotal.toFixed(2)}</b></p>`+
+  (taxa?`<p>Taxa de entrega <b style="float:right">R$ ${taxa.toFixed(2)}</b></p>`:'')+
+  `<hr><b>Total: R$ ${total.toFixed(2)}</b>`;
+}
+function atualizarTotal(){taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${taxaEntrega.toFixed(2)}`:'Retirada no local: sem taxa.';render(window.d||[])}
+function uuidOffline(){return 'getres-'+Date.now()+'-'+Math.random().toString(16).slice(2)}
+function salvarOffline(){
+  const d=window.d||[]; if(!d.length)return alert('Não há dados do produto salvos para vender offline.');
+  const sale={
+    offline_id:uuidOffline(),
+    criado_em:new Date().toISOString(),
+    pagamento:pag.value,
+    tipo_entrega:entrega.value,
+    taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,
+    itens:d.map(x=>({id:Number(x.id),nome:x.nome,tamanho:x.tamanho||'',preco:Number(x.preco)}))
+  };
+  let q=getOfflineQueue();q.push(sale);setOfflineQueue(q);
+  saveOfflineHistory(sale,'PENDENTE',null,'');
+  // baixa o estoque do catálogo local imediatamente; o servidor fará a mesma baixa uma única vez na sincronização.
+  let cat=catalogoLocal(); const qtd={}; sale.itens.forEach(x=>qtd[x.id]=(qtd[x.id]||0)+1);
+  cat=cat.map(x=>qtd[x.id]?({...x,estoque:Math.max(0,Number(x.estoque||0)-qtd[x.id])}):x);
+  localStorage.setItem('getres_catalogo',JSON.stringify(cat));
+  localStorage.removeItem('g3cart');
+  showNetStatus();
+  alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
+  location='/pedidos?offline=1';
+}
+async function fechar(){
+  if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
+  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0};
+  if(!navigator.onLine){salvarOffline();return}
+  try{
+    const r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const x=await r.json();
+    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id}else alert(x.erro);
+  }catch(e){salvarOffline()}
+}
+carregar();
+</script>"""
+    return page("Carrinho",html.replace("__TAXA__",f"{taxa:.2f}"))
+
+
+@app.route("/sync-offline-product",methods=["POST"])
+def sync_offline_product():
+    d=request.get_json() or {}; oid=str(d.get("offline_id") or "").strip()
+    if not oid or not str(d.get("nome") or "").strip(): return {"ok":False,"erro":"Produto offline inválido."},400
+    c=db(); ex=c.execute("SELECT id FROM produtos WHERE offline_id=?",(oid,)).fetchone()
+    if ex: c.close(); return {"ok":True,"id":ex["id"],"duplicado":True}
+    try:
+        imagens=d.get("imagens") or []; arquivos=[]
+        for data in imagens[:6]:
+            if not isinstance(data,str) or "," not in data: continue
+            cab,b64=data.split(",",1); mime=cab.split(";",1)[0].split(":",1)[1] if ":" in cab else "image/jpeg"
+            ext=".png" if "png" in mime else ".webp" if "webp" in mime else ".jpg"; arq=secrets.token_hex(10)+ext
+            try: dados=base64.b64decode(b64)
+            except Exception: continue
+            if dados: arquivos.append((arq,dados,mime))
+        img=arquivos[0][0] if arquivos else ""
+        cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid)); pid=cur.lastrowid
+        for i,(a,dados,mime) in enumerate(arquivos): c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,a,1 if i==0 else 0,psycopg2.Binary(dados),mime))
+        c.commit();c.close();return {"ok":True,"id":pid}
+    except Exception as e:
+        c.rollback();c.close();return {"ok":False,"erro":str(e)},400
+
+@app.route("/offline/catalogo")
+def offline_catalogo():
+    c=db()
+    rows=c.execute("SELECT id,nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,offline_id FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+@app.route("/sync-offline-sale",methods=["POST"])
+def sync_offline_sale():
+    d=request.get_json() or {}; offline_id=str(d.get("offline_id") or "").strip(); itens=d.get("itens") or []
+    if not offline_id or not itens: return {"ok":False,"erro":"Pedido offline inválido."},400
+    c=db(); existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
+    if existente: vid=existente["id"];c.close();return {"ok":True,"id":vid,"duplicado":True}
+    try:
+        total=0.0; itens_servidor=[]; contagem={}
+        for item in itens:
+            pid=int(item.get("id"));contagem[pid]=contagem.get(pid,0)+1
+        # trava os produtos enquanto confere/baixa estoque para impedir venda duplicada concorrente
+        for pid,qtd in contagem.items():
+            r=c.execute("SELECT * FROM produtos WHERE id=? AND COALESCE(ativo,1)=1 FOR UPDATE",(pid,)).fetchone()
+            if not r: raise ValueError(f"Produto {pid} não existe mais.")
+            if int(r["estoque"] or 0)<qtd: raise ValueError(f"Estoque insuficiente para {r['nome']}.")
+            for _ in range(qtd): itens_servidor.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":float(r["preco"] or 0)}); total+=float(r["preco"] or 0)
+            c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
+        tipo=d.get("tipo_entrega","retirada"); taxa=0.0
+        if tipo=="entrega":
+            try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
+            except Exception: taxa=0.0
+        total+=taxa
+        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?,?)",(d.get("criado_em") or datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens_servidor,ensure_ascii=False),tipo,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id,1)); vid=cur.lastrowid
+        c.commit();c.close();return {"ok":True,"id":vid,"sincronizado":True}
+    except psycopg2.IntegrityError:
+        c.rollback(); r=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone(); vid=r["id"] if r else None; c.close(); return {"ok":True,"id":vid,"duplicado":True}
+    except Exception as e:
+        c.rollback();c.close();return {"ok":False,"erro":str(e)},409
 
 @app.route("/api-cart")
 def api_cart():
@@ -491,25 +759,38 @@ def api_cart():
 @app.route("/vender",methods=["POST"])
 def vender():
     d=request.get_json() or {}
-    ids=d.get("ids",[])
+    ids=d.get("ids",[]) or []
     if not ids:
         return {"ok":False,"erro":"Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar."},400
-    c=db();it=[];total=0
-    for i in ids:
-        r=c.execute("SELECT * FROM produtos WHERE id=?",(i,)).fetchone()
-        if not r or r["estoque"]<1:c.close();return {"ok":False,"erro":"Produto sem estoque"}
-        it.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":r["preco"]});total+=r["preco"]
-    if not it or total<=0:
-        c.rollback();c.close()
-        return {"ok":False,"erro":"Não é possível finalizar uma venda com total R$ 0,00."},400
-    tipo_entrega=d.get("tipo_entrega","retirada")
-    taxa=0
-    if tipo_entrega=="entrega":
-        try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
-        except: taxa=0
-    total+=taxa
-    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
-    vid=cur.lastrowid;c.commit();c.close();return {"ok":True,"id":vid}
+    try:
+        ids=[int(x) for x in ids]
+    except Exception:
+        return {"ok":False,"erro":"Carrinho inválido."},400
+    contagem={}
+    for pid in ids: contagem[pid]=contagem.get(pid,0)+1
+    c=db(); itens=[]; total=0.0
+    try:
+        # Trava e valida todos os produtos sem baixar estoque ainda.
+        for pid,qtd in contagem.items():
+            r=c.execute("SELECT * FROM produtos WHERE id=? AND COALESCE(ativo,1)=1 FOR UPDATE",(pid,)).fetchone()
+            if not r or int(r["estoque"] or 0)<qtd:
+                nome=r["nome"] if r else "Produto"
+                raise ValueError(f"Estoque insuficiente para {nome}.")
+            for _ in range(qtd):
+                itens.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":float(r["preco"] or 0)})
+                total+=float(r["preco"] or 0)
+        if not itens or total<=0: raise ValueError("Não é possível finalizar uma venda com total R$ 0,00.")
+        tipo_entrega=d.get("tipo_entrega","retirada")
+        taxa=0.0
+        if tipo_entrega=="entrega":
+            try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
+            except Exception: taxa=0.0
+        total+=taxa
+        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,0))
+        vid=cur.lastrowid; c.commit(); c.close(); return {"ok":True,"id":vid}
+    except Exception as e:
+        c.rollback(); c.close(); return {"ok":False,"erro":str(e)},409
 
 @app.route("/venda/<int:vid>")
 def venda(vid):
@@ -552,70 +833,87 @@ def venda(vid):
 
 @app.route("/confirmar-pagamento/<int:vid>",methods=["POST"])
 def confirmar_pagamento(vid):
-    c=db()
-    v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone()
-    if not v:
-        c.close()
-        return "Venda não encontrada",404
+    c=db(); v=c.execute("SELECT * FROM vendas WHERE id=? FOR UPDATE",(vid,)).fetchone()
+    if not v: c.close(); return "Venda não encontrada",404
     if (v["status"] or "AGUARDANDO_PAGAMENTO") in ("ATIVO","AGUARDANDO_PAGAMENTO"):
         try: itens=json.loads(v["itens"] or "[]")
         except Exception: itens=[]
-        # Confere todo o estoque antes de alterar qualquer produto.
-        for item in itens:
-            pid=item.get("id")
-            if not pid: continue
-            qtd=sum(1 for x in itens if x.get("id")==pid)
-            r=c.execute("SELECT estoque,nome FROM produtos WHERE id=?",(pid,)).fetchone()
-            if not r or r["estoque"] < qtd:
-                disponivel=int(r["estoque"]) if r else 0
-                c.close(); nome=r["nome"] if r else "Produto"
-                return page("Estoque insuficiente",f"<h2>⚠️ Estoque insuficiente</h2><div class=box><b>{nome}</b><p>Disponível: <b>{disponivel}</b></p><p>O pagamento não foi confirmado.</p><a class=btn href='/carrinho'>← VOLTAR AO CARRINHO</a></div>"),400
-        # O estoque só é baixado quando o pagamento é confirmado.
-        processados=set()
-        for item in itens:
-            pid=item.get("id")
-            if not pid or pid in processados: continue
-            qtd=sum(1 for x in itens if x.get("id")==pid)
-            c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
-            processados.add(pid)
-        c.execute("UPDATE vendas SET status='PAGO', estoque_devolvido=0 WHERE id=?",(vid,))
-        c.commit()
-    c.close()
-    return redirect("/venda/"+str(vid))
+        if not int(v.get("estoque_baixado") or 0):
+            contagem={}
+            for item in itens:
+                pid=item.get("id")
+                if pid: contagem[pid]=contagem.get(pid,0)+1
+            for pid,qtd in contagem.items():
+                r=c.execute("SELECT estoque,nome FROM produtos WHERE id=? FOR UPDATE",(pid,)).fetchone()
+                if not r or int(r["estoque"] or 0)<qtd:
+                    disponivel=int(r["estoque"] or 0) if r else 0; nome=r["nome"] if r else "Produto"; c.rollback();c.close()
+                    return page("Estoque insuficiente",f"<h2>⚠️ Estoque insuficiente</h2><div class=box><b>{nome}</b><p>Disponível: <b>{disponivel}</b></p><p>O pagamento não foi confirmado.</p><a class=btn href='/carrinho'>← VOLTAR AO CARRINHO</a></div>"),400
+            for pid,qtd in contagem.items(): c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
+        c.execute("UPDATE vendas SET status='PAGO',estoque_devolvido=0,estoque_baixado=1 WHERE id=?",(vid,)); c.commit()
+    c.close(); return redirect("/venda/"+str(vid))
 
 
 @app.route("/cancelar-pedido/<int:vid>",methods=["POST"])
 def cancelar_pedido(vid):
-    c=db(); v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone()
-    if not v:
-        c.close(); return "Venda não encontrada",404
+    c=db(); v=c.execute("SELECT * FROM vendas WHERE id=? FOR UPDATE",(vid,)).fetchone()
+    if not v: c.close(); return "Venda não encontrada",404
     status_atual=v["status"] or "AGUARDANDO_PAGAMENTO"
     if status_atual!="CANCELADO":
-        # Pedido ATIVO ainda não baixou estoque, então cancelar não altera o estoque.
-        # Se futuramente houver cancelamento de pedido PAGO, devolve o estoque uma única vez.
-        if status_atual=="PAGO" and not v["estoque_devolvido"]:
+        if int(v.get("estoque_baixado") or 0) and not int(v.get("estoque_devolvido") or 0):
             try: itens=json.loads(v["itens"] or "[]")
             except Exception: itens=[]
+            contagem={}
             for item in itens:
                 pid=item.get("id")
-                if pid: c.execute("UPDATE produtos SET estoque=estoque+1 WHERE id=?",(pid,))
+                if pid: contagem[pid]=contagem.get(pid,0)+1
+            for pid,qtd in contagem.items(): c.execute("UPDATE produtos SET estoque=estoque+? WHERE id=?",(qtd,pid))
             c.execute("UPDATE vendas SET estoque_devolvido=1 WHERE id=?",(vid,))
-        c.execute("UPDATE vendas SET status='CANCELADO' WHERE id=?",(vid,))
-        c.commit()
-    c.close()
-    return redirect("/venda/"+str(vid))
+        c.execute("UPDATE vendas SET status='CANCELADO' WHERE id=?",(vid,)); c.commit()
+    c.close(); return redirect("/venda/"+str(vid))
 
 @app.route("/comprovante/<int:vid>")
 def comprovante(vid):
     c=db();v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone();c.close();C=conf()
     itens=json.loads(v["itens"]);linhas="".join(f"<p style='overflow-wrap:anywhere'>{x['nome']} {x['tamanho']}<br>R$ {x['preco']:.2f}</p>" for x in itens)
-    logo=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block;margin:0 auto 2mm'>" if C.get("logo") else "")
-    return f"""<!doctype html><meta name=viewport content='width=device-width'><style>body{{width:54mm;margin:auto;font:12px monospace;color:#000;background:#fff;text-align:center}}hr{{border:0;border-top:1px dashed}}button{{width:100%;padding:12px}}.marca{{display:flex;align-items:center;justify-content:center;gap:5px}}@media print{{button{{display:none}}}}</style><div class=marca style="display:block">{logo}<h2 style="margin:0 0 2mm">{C['nome']}</h2></div><p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr><p>{'ENTREGA - Taxa R$ %.2f' % v['taxa_entrega'] if v['tipo_entrega']=='entrega' else 'RETIRADA NO LOCAL'}</p><h3>TOTAL R$ {v['total']:.2f}</h3><p>{v['pagamento']}<br>{C['mensagem']}</p><button onclick=print()>IMPRIMIR / RAWBT</button>"""
+    logo_uri=logo_data_uri()
+    logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
+    return f"""<!doctype html><meta name=viewport content='width=device-width'><style>body{{width:54mm;margin:auto;font:12px monospace;color:#000;background:#fff;text-align:center}}hr{{border:0;border-top:1px dashed}}button{{width:100%;padding:12px}}.marca{{display:flex;align-items:center;justify-content:center;gap:5px}}@media print{{button{{display:none}}}}</style><div class=marca>{logo}<h2 style="margin:0;font-size:15px;line-height:1;white-space:nowrap">{C['nome']}</h2></div><p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr><p>{'ENTREGA - Taxa R$ %.2f' % v['taxa_entrega'] if v['tipo_entrega']=='entrega' else 'RETIRADA NO LOCAL'}</p><h3>TOTAL R$ {v['total']:.2f}</h3><p>{v['pagamento']}<br>{C['mensagem']}</p><button onclick=print()>IMPRIMIR / RAWBT</button>"""
 
 @app.route("/pedidos")
 def pedidos():
     c=db();rows=c.execute("SELECT * FROM vendas ORDER BY id DESC").fetchall();c.close()
-    x="<h2>Pedidos</h2>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
+    x="<h2>Pedidos</h2><div id=pedidosOffline></div>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
+    x+="""<script>
+function renderPedidosOffline(){
+  const el=document.getElementById('pedidosOffline');if(!el)return;
+  const q=getOfflineQueue();
+  let h=getOfflineHistory();
+  // Recupera pedidos pendentes antigos para o histórico local, caso tenham sido salvos antes desta correção.
+  q.forEach(p=>{if(!h.some(x=>x.offline_id===p.offline_id))h.unshift({...p,local_status:'PENDENTE'})});
+  setOfflineHistory(h.slice(0,100));
+  const pendentes=q.map(p=>({...p,local_status:'PENDENTE'}));
+  const idsPendentes=new Set(pendentes.map(p=>p.offline_id));
+  const sincronizados=h.filter(p=>!idsPendentes.has(p.offline_id) && p.local_status==='SINCRONIZADO').slice(0,5);
+  const lista=[...pendentes,...sincronizados];
+  if(!lista.length){el.innerHTML='';return}
+  el.innerHTML=lista.map((p,i)=>{
+    const subtotal=(p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0);
+    const total=subtotal+Number(p.taxa_entrega||0);
+    const pendente=p.local_status!=='SINCRONIZADO';
+    const st=pendente?'⏳ AGUARDANDO SINCRONIZAÇÃO':`✅ SINCRONIZADO${p.server_id?' • Venda #'+p.server_id:''}`;
+    const erro=p.last_error?`<div class=muted style="color:#ff9b9b">${p.last_error}</div>`:'';
+    const btn=pendente?`<button class=danger style="width:100%;margin-top:12px" onclick="excluirOffline('${p.offline_id}')">🗑️ EXCLUIR PEDIDO OFFLINE</button>`:'';
+    return `<div class=box style="border-color:${pendente?'#a87920':'#2f8f46'}"><div class=row><div><b>📴 Pedido offline</b><div class=muted>${st}</div>${erro}</div><b>R$ ${total.toFixed(2)}</b></div>${btn}</div>`;
+  }).join('');
+}
+function excluirOffline(offlineId){
+  if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
+  let q=getOfflineQueue().filter(x=>x.offline_id!==offlineId);setOfflineQueue(q);
+  let h=getOfflineHistory().filter(x=>x.offline_id!==offlineId);setOfflineHistory(h);
+  renderPedidosOffline();showNetStatus();
+}
+renderPedidosOffline();
+</script>"""
     return page("Pedidos",x)
 
 @app.route("/menu")
@@ -672,20 +970,27 @@ def config():
     if request.method=="POST":
         c=db()
         for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem","impressora","taxa_entrega"]:
-            c.execute("INSERT OR REPLACE INTO config VALUES(?,?)",(k,request.form.get(k,"")))
+            c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(k,request.form.get(k,"")))
         logo=request.files.get("logo")
         if logo and logo.filename:
-            ext=os.path.splitext(logo.filename)[1].lower() or ".png"; arq="logo_getres"+ext
-            logo.save("static/"+arq); c.execute("INSERT OR REPLACE INTO config VALUES('logo',?)",(arq,))
+            dados=logo.read(); mime=logo.mimetype or "image/png"
+            if dados:
+                uri="data:"+mime+";base64,"+base64.b64encode(dados).decode("ascii")
+                c.execute("INSERT INTO config(chave,valor) VALUES('logo',?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(uri,))
         c.commit();c.close();return redirect("/config")
     C=conf();labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX","whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço","mensagem":"Mensagem do comprovante","impressora":"Impressora","taxa_entrega":"Taxa de entrega (R$)"}
-    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>" for k in labels)
-    return page("Configurações",f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta.</p><button style='width:100%'>SALVAR</button></form>")
+    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>{''}" for k in labels)
+    return page("Configurações",f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta. A nova logo fica salva no Supabase.</p><button style='width:100%'>SALVAR</button></form>")
 
 @app.route("/teste")
 def teste():
     return """<!doctype html><meta name=viewport content='width=device-width'><style>body{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}button{width:100%;padding:12px}@media print{button{display:none}}</style><h2>BRECHÓ GETRES</h2><p>TESTE 58 mm<br>RawBT / KA-1445</p><p>------------------------------</p><p>Se tudo sair completo,<br>a largura está correta.</p><button onclick=print()>IMPRIMIR</button>"""
 
+
+@app.route("/status-banco")
+def status_banco():
+    c=db(); p=c.execute("SELECT COUNT(*) n FROM produtos").fetchone()["n"]; v=c.execute("SELECT COUNT(*) n FROM vendas").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM fotos").fetchone()["n"]; c.close()
+    return {"ok":True,"backend":"postgresql/supabase","persistente":True,"produtos":int(p),"vendas":int(v),"fotos":int(f)}
 
 @app.route("/manifest.json")
 def manifest():
@@ -695,9 +1000,94 @@ def manifest():
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js="""const C='brecho-getres-6-fotos-logo-v4';
-self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/produtos','/carrinho','/pedidos','/estatisticas','/menu','/config']))));
-self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{let x=r.clone();caches.open(C).then(c=>c.put(e.request,x));return r}).catch(()=>caches.match(e.request)))});
+    js=r"""
+const CACHE='getres-app7-final-v11';
+const ROUTES=[
+  '/?menu=1',
+  '/destaques',
+  '/produtos',
+  '/novo',
+  '/carrinho',
+  '/pedidos',
+  '/estatisticas',
+  '/config',
+  '/offline/catalogo'
+];
+
+self.addEventListener('install',e=>{
+  e.waitUntil((async()=>{
+    const c=await caches.open(CACHE);
+    for(const u of ROUTES){
+      try{
+        const r=await fetch(u,{cache:'no-store'});
+        if(r.ok) await c.put(u,r.clone());
+      }catch(_){}
+    }
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate',e=>{
+  e.waitUntil(
+    caches.keys()
+      .then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
+      .then(()=>self.clients.claim())
+  );
+});
+
+self.addEventListener('fetch',e=>{
+  const req=e.request;
+  if(req.method!=='GET') return;
+
+  const url=new URL(req.url);
+  if(url.origin!==self.location.origin) return;
+
+  if(req.mode==='navigate'){
+    e.respondWith((async()=>{
+      try{
+        const fresh=await fetch(req);
+        if(fresh && fresh.ok){
+          const c=await caches.open(CACHE);
+          await c.put(url.pathname+(url.search||''),fresh.clone());
+        }
+        return fresh;
+      }catch(err){
+        const c=await caches.open(CACHE);
+
+        let hit=await c.match(url.pathname+(url.search||''),{ignoreSearch:false});
+        if(hit) return hit;
+
+        hit=await c.match(url.pathname,{ignoreSearch:true});
+        if(hit) return hit;
+
+        // Nunca cai em "/" puro, pois "/" exibe a tela "Entrar na loja".
+        hit=await c.match('/?menu=1',{ignoreSearch:false});
+        if(hit) return hit;
+
+        return new Response(
+          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
+          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
+        );
+      }
+    })());
+    return;
+  }
+
+  e.respondWith((async()=>{
+    const cached=await caches.match(req);
+    if(cached) return cached;
+    try{
+      const fresh=await fetch(req);
+      if(fresh && fresh.ok){
+        const c=await caches.open(CACHE);
+        await c.put(req,fresh.clone());
+      }
+      return fresh;
+    }catch(err){
+      return new Response('',{status:503});
+    }
+  })());
+});
 """
     resp=Response(js,mimetype="application/javascript")
     resp.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
@@ -708,3 +1098,4 @@ migrar_nome_getres()
 if __name__=="__main__":
     print("BRECHÓ GETRES: http://127.0.0.1:5000")
     app.run(host="0.0.0.0",port=5000,debug=False)
+
