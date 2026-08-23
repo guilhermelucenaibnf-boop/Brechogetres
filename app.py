@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL FIX ÚNICO — FOTOS + VELOCIDADE — 2026-08-23
+# BRECHÓ GETRES — FINAL V19 — ADICIONAR FOTOS NÃO VOLTA AO MENU
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -1419,7 +1419,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-1","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-2-NAVEGACAO","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1441,9 +1441,11 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v16-rapido-foto-direta';
+const CACHE='getres-final-v19-navegacao-correta';
 
-self.addEventListener('install',e=>{e.waitUntil(self.skipWaiting())});
+self.addEventListener('install',e=>{
+  e.waitUntil(self.skipWaiting());
+});
 
 self.addEventListener('activate',e=>{
   e.waitUntil(
@@ -1456,43 +1458,48 @@ self.addEventListener('activate',e=>{
 self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
+
   const url=new URL(req.url);
   if(url.origin!==self.location.origin) return;
 
-  if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
-    e.respondWith((async()=>{
-      const c=await caches.open(CACHE);
-      const hit=await c.match(req);
-      if(hit) return hit;
-      try{
-        const r=await fetch(req);
-        if(r.ok) await c.put(req,r.clone());
-        return r;
-      }catch(_){return hit || Response.error()}
-    })());
-    return;
-  }
-
+  // NAVEGAÇÃO:
+  // nunca troca /fotos, /produtos, /carrinho etc. pelo menu principal.
+  // Aguarda a página real quando há rede; usa somente a MESMA página em cache se ficar offline.
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
       const key=url.pathname+(url.search||'');
-      const cached=await c.match(key);
       try{
-        const controller=new AbortController();
-        const timer=setTimeout(()=>controller.abort(),2500);
-        const r=await fetch(req,{signal:controller.signal});
-        clearTimeout(timer);
+        const r=await fetch(req,{cache:'no-store'});
         if(r && r.ok) await c.put(key,r.clone());
         return r;
       }catch(_){
-        if(cached) return cached;
-        const home=await c.match('/?menu=1');
-        if(home) return home;
-        return new Response('<h2>Sem conexão</h2><p>Abra novamente quando houver internet.</p>',
-          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}});
+        const mesmaPagina=await c.match(key);
+        if(mesmaPagina) return mesmaPagina;
+        return new Response(
+          '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Sem conexão</h2><p>Esta tela ainda não foi aberta neste aparelho enquanto estava online.</p><button onclick="history.back()" style="padding:14px">VOLTAR</button></body>',
+          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
+        );
       }
     })());
+    return;
+  }
+
+  // Fotos: rede primeiro para a foto nova aparecer imediatamente;
+  // cache apenas como alternativa offline.
+  if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
+    e.respondWith((async()=>{
+      const c=await caches.open(CACHE);
+      try{
+        const r=await fetch(req,{cache:'no-store'});
+        if(r.ok) await c.put(req,r.clone());
+        return r;
+      }catch(_){
+        const hit=await c.match(req);
+        return hit || Response.error();
+      }
+    })());
+    return;
   }
 });
 """
