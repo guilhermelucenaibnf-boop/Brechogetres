@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V20 — CARRINHO E PEDIDOS FUNCIONAM OFFLINE
+# BRECHÓ GETRES — FINAL V21 — PEDIDOS OFFLINE GARANTIDO
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -1419,7 +1419,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-3-OFFLINE-CARRINHO-PEDIDOS","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-4-PEDIDOS-OFFLINE-GARANTIDO","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1441,7 +1441,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v20-offline-carrinho-pedidos';
+const CACHE='getres-final-v21-pedidos-offline-garantido';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
@@ -1502,6 +1502,56 @@ self.addEventListener('fetch',e=>{
         // Segunda tentativa: algumas páginas podem ter sido guardadas com URL exata.
         const exata=await c.match(req);
         if(exata) return exata;
+
+        // /pedidos precisa funcionar mesmo se o HTML online nunca tiver entrado no cache.
+        // A venda offline já foi gravada no localStorage antes do redirecionamento.
+        if(url.pathname==='/pedidos'){
+          const html=`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pedidos - BRECHÓ GETRES</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
+main{width:min(100%,560px);margin:auto;padding:26px 18px 80px}.brand{text-align:center;color:#e7a92d;font-weight:900;font-size:25px;margin-bottom:28px}
+h1{font-size:28px}.box{border:1px solid #8a6422;border-radius:16px;padding:16px;margin:14px 0;background:#111}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.muted{color:#bbb;font-size:14px;margin-top:5px}
+.price{color:#e7a92d;font-size:21px;font-weight:900}.btn{display:inline-block;border:0;border-radius:11px;padding:14px 17px;background:#efad29;color:#111;font-weight:900;text-decoration:none}
+.danger{width:100%;margin-top:12px;border:0;border-radius:10px;padding:12px;background:#8b2025;color:#fff;font-weight:800}
+.net{padding:10px 14px;text-align:center;background:#171717;font-size:14px}
+</style></head><body>
+<div class="net">📴 Sem conexão — pedidos salvos neste aparelho</div>
+<main><div class="brand">♧ BRECHÓ GETRES</div><a class="btn" href="/">← VOLTAR</a>
+<h1>Pedidos</h1><div id="lista"></div></main>
+<script>
+function fila(){try{return JSON.parse(localStorage.getItem('getres_offline_sales')||'[]')}catch(e){return []}}
+function hist(){try{return JSON.parse(localStorage.getItem('getres_offline_history')||'[]')}catch(e){return []}}
+function salvarFila(q){localStorage.setItem('getres_offline_sales',JSON.stringify(q))}
+function salvarHist(h){localStorage.setItem('getres_offline_history',JSON.stringify(h))}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function render(){
+ let q=fila(),h=hist();
+ q.forEach(p=>{if(!h.some(x=>x.offline_id===p.offline_id))h.unshift({...p,local_status:'PENDENTE'})});
+ salvarHist(h);
+ const pend=new Set(q.map(x=>x.offline_id));
+ const itens=h.filter(x=>pend.has(x.offline_id)||x.local_status==='PENDENTE').concat(
+   h.filter(x=>!pend.has(x.offline_id)&&x.local_status==='SINCRONIZADO').slice(0,5)
+ );
+ document.getElementById('lista').innerHTML=itens.length?itens.map(p=>{
+   const total=Number(p.total||0), aguard=pend.has(p.offline_id)||p.local_status==='PENDENTE';
+   const quando=esc(p.criado_em||p.data||'');
+   return '<div class="box"><div class="row"><div><b>📴 Pedido offline</b><div class="muted">'+
+     (aguard?'Aguardando internet para sincronizar':'Sincronizado')+'</div><div class="muted">'+quando+
+     '</div><div class="muted">Pagamento: '+esc(p.pagamento||'')+'</div></div><div class="price">R$ '+total.toFixed(2).replace('.',',')+
+     '</div></div>'+(aguard?'<button class="danger" data-id="'+esc(p.offline_id||'')+'">🗑️ EXCLUIR PEDIDO OFFLINE</button>':'')+'</div>';
+ }).join(''):'<div class="box">Nenhum pedido offline salvo neste aparelho.</div>';
+ document.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>{
+   if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
+   const id=b.getAttribute('data-id');salvarFila(fila().filter(x=>x.offline_id!==id));salvarHist(hist().filter(x=>x.offline_id!==id));render();
+ });
+}
+render();
+</script></body></html>`;
+          return new Response(html,{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
+        }
 
         return new Response(
           '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Sem conexão</h2><p>Esta tela ainda não está disponível offline neste aparelho.</p><button onclick="history.back()" style="padding:14px">VOLTAR</button></body>',
