@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V24 — OFFLINE SEM DUPLICATA E SEM TELA BRANCA
+# BRECHÓ GETRES — FINAL V25 — ESTOQUE OFFLINE SINCRONIZADO CORRETAMENTE
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -366,9 +366,13 @@ async function syncOfflineActions(){
   if(!navigator.onLine)return; let q=getOfflineActions(); if(!q.length)return; const rest=[];
   for(const a of q){try{
     const rota=a.tipo==='confirmar'?('/confirmar-pagamento/'+a.vid):(a.tipo==='cancelar'?('/cancelar-pedido/'+a.vid):'');
-    if(!rota)continue; const r=await fetch(rota,{method:'POST',redirect:'follow'}); if(!r.ok)rest.push(a);
+    if(!rota)continue;
+    const r=await fetch(rota,{method:'POST',redirect:'follow',cache:'no-store'});
+    if(!r.ok)rest.push(a);
   }catch(e){rest.push(a)}}
-  setOfflineActions(rest);showNetStatus();
+  setOfflineActions(rest);
+  await refreshOfflineCatalog();
+  showNetStatus();
 }
 document.addEventListener('submit',function(ev){
   const f=ev.target;if(!f||navigator.onLine)return; const ac=f.getAttribute('action')||'';
@@ -429,20 +433,38 @@ async function syncOfflineSales(){
   }
   setOfflineQueue(rest);showNetStatus();
   if(typeof renderPedidosOffline==="function")renderPedidosOffline();
-  if(rest.length===0)refreshOfflineCatalog();
+  await refreshOfflineCatalog();
 }
-window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales();syncOfflineActions()});
+async function syncTudoOffline(){
+  if(!navigator.onLine)return;
+  showNetStatus();
+  await syncOfflineProducts();
+  await syncOfflineSales();
+  await syncOfflineActions();
+  await refreshOfflineCatalog();
+  showNetStatus();
+
+  // Se o usuário está vendo Produtos/Destaques, força UMA atualização após a
+  // sincronização para mostrar o estoque real do Supabase, e não a página restaurada
+  // pelo navegador/cache de quando estava offline.
+  if(location.pathname==='/produtos' || location.pathname==='/destaques'){
+    const marca='getres_sync_reload_'+location.pathname;
+    if(sessionStorage.getItem(marca)!=='1'){
+      sessionStorage.setItem(marca,'1');
+      location.reload();
+      return;
+    }
+  }
+}
+window.addEventListener("online",()=>{sessionStorage.removeItem('getres_sync_reload_/produtos');sessionStorage.removeItem('getres_sync_reload_/destaques');syncTudoOffline()});
 window.addEventListener("offline",showNetStatus);
 document.addEventListener("DOMContentLoaded",()=>{
   showNetStatus();
   if(!navigator.onLine)return;
   const agora=Date.now(), ultimo=Number(localStorage.getItem("getres_last_sync")||0);
-  if(agora-ultimo>30000){
+  if(agora-ultimo>15000){
     localStorage.setItem("getres_last_sync",String(agora));
-    refreshOfflineCatalog();
-    syncOfflineProducts();
-    syncOfflineSales();
-    syncOfflineActions();
+    syncTudoOffline();
   }
 });
 </script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
@@ -1088,8 +1110,28 @@ def offline_catalogo():
 def sync_offline_sale():
     d=request.get_json() or {}; offline_id=str(d.get("offline_id") or "").strip(); itens=d.get("itens") or []
     if not offline_id or not itens: return {"ok":False,"erro":"Pedido offline inválido."},400
-    c=db(); existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
-    if existente: vid=existente["id"];c.close();return {"ok":True,"id":vid,"duplicado":True}
+    c=db(); existente=c.execute("SELECT * FROM vendas WHERE offline_id=? FOR UPDATE",(offline_id,)).fetchone()
+    if existente:
+        vid=existente["id"]
+        if not int(existente.get("estoque_baixado") or 0):
+            try:
+                itens_exist=json.loads(existente["itens"] or "[]")
+            except Exception:
+                itens_exist=[]
+            contagem_exist={}
+            for item in itens_exist:
+                pid=item.get("id")
+                if pid: contagem_exist[int(pid)]=contagem_exist.get(int(pid),0)+1
+            for pid,qtd in contagem_exist.items():
+                r=c.execute("SELECT estoque,nome FROM produtos WHERE id=? FOR UPDATE",(pid,)).fetchone()
+                if not r or int(r["estoque"] or 0)<qtd:
+                    c.rollback();c.close()
+                    return {"ok":False,"erro":f"Estoque insuficiente para {r['nome'] if r else 'Produto'}."},409
+            for pid,qtd in contagem_exist.items():
+                c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
+            c.execute("UPDATE vendas SET estoque_baixado=1,estoque_devolvido=0 WHERE id=?",(vid,))
+            c.commit()
+        c.close();return {"ok":True,"id":vid,"duplicado":True}
     try:
         total=0.0; itens_servidor=[]; contagem={}
         for item in itens:
@@ -1482,7 +1524,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-6-OFFLINE-IDEMPOTENTE","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-7-OFFLINE-ESTOQUE-SYNC","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1504,7 +1546,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v24-offline-sem-duplicata-sem-tela-branca';
+const CACHE='getres-final-v25-offline-estoque-sync';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
