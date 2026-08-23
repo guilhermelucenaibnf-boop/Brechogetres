@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — BASE APP7 CONSOLIDADA — SUPABASE + OFFLINE FINAL 2026-08-23
+# BRECHÓ GETRES — APP ÚNICO FINAL — SUPABASE + OFFLINE + FOTOS + ESTOQUE + IMPRESSÃO MULTIMODO
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -151,8 +151,17 @@ def init():
     ]: c.execute(sql)
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
-    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
+    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"android","largura_papel":"58","impressora_nome":"","impressora_ip":"","impressora_porta":"9100","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
         c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO NOTHING",(k,v))
+    c.execute("DELETE FROM fotos WHERE dados IS NULL OR octet_length(dados)=0")
+    c.execute("""UPDATE produtos p SET imagem=COALESCE((
+        SELECT f.arquivo FROM fotos f
+        WHERE f.produto_id=p.id AND f.dados IS NOT NULL AND octet_length(f.dados)>0
+        ORDER BY f.principal DESC,f.id DESC LIMIT 1
+    ),'') WHERE COALESCE(p.imagem,'')<>'' AND NOT EXISTS (
+        SELECT 1 FROM fotos fx WHERE fx.produto_id=p.id AND fx.arquivo=p.imagem
+        AND fx.dados IS NOT NULL AND octet_length(fx.dados)>0
+    )""")
     c.commit(); c.close()
 
 def migrar_nome_getres():
@@ -166,10 +175,94 @@ def migrar_nome_getres():
 def conf():
     c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close(); return d
 
+def reparar_fotos_produto(c, produto_id=None):
+    """Remove somente referências de fotos sem bytes e repara a foto principal."""
+    filtro=""
+    params=()
+    if produto_id is not None:
+        filtro=" AND produto_id=?"
+        params=(produto_id,)
+    c.execute("DELETE FROM fotos WHERE (dados IS NULL OR octet_length(dados)=0)"+filtro, params)
+    if produto_id is not None:
+        pids=[produto_id]
+    else:
+        pids=[r["id"] for r in c.execute("SELECT id FROM produtos").fetchall()]
+    for pid in pids:
+        principal=c.execute(
+            "SELECT id,arquivo FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 "
+            "ORDER BY principal DESC,id DESC LIMIT 1",(pid,)
+        ).fetchone()
+        if principal:
+            c.execute("UPDATE fotos SET principal=CASE WHEN id=? THEN 1 ELSE 0 END WHERE produto_id=?",
+                      (principal["id"],pid))
+            c.execute("UPDATE produtos SET imagem=? WHERE id=?",(principal["arquivo"],pid))
+        else:
+            c.execute("UPDATE produtos SET imagem='' WHERE id=?",(pid,))
+
 def logo_data_uri():
     """Retorna a logo persistida no Supabase em data URI."""
     salvo=str(conf().get("logo","") or "").strip()
     return salvo if salvo.startswith("data:image/") else ""
+
+def largura_impressao_mm(C=None):
+    C=C or conf()
+    try:
+        mm=int(str(C.get("largura_papel","58")).strip())
+    except Exception:
+        mm=58
+    return 76 if mm>=80 else 54
+
+def botoes_impressao(texto_compartilhar="BRECHÓ GETRES"):
+    """
+    Opções de impressão sem obrigar RawBT:
+    - Android padrão / qualquer serviço de impressão instalado
+    - Compartilhar para app de impressão
+    - RawBT opcional
+    - USB/OTG e Wi‑Fi por meio do serviço/plugin Android do fabricante
+    - ESC/POS genérico via compartilhamento
+    """
+    C=conf()
+    modo=str(C.get("impressora","android") or "android")
+    texto_json=json.dumps(texto_compartilhar,ensure_ascii=False)
+    return f"""
+    <div class='acoes-impressao'>
+      <button type='button' onclick='window.print()'>🖨️ ANDROID / IMPRESSÃO PADRÃO</button>
+      <button type='button' onclick='compartilharImpressao()'>📤 COMPARTILHAR PARA APP DE IMPRESSÃO</button>
+      <button type='button' onclick='copiarEscPos()'>📋 COPIAR TEXTO ESC/POS</button>
+      <details style='margin-top:8px;text-align:left'>
+        <summary style='cursor:pointer;font-weight:bold'>Outras opções</summary>
+        <p style='font-size:12px'>• RawBT: opcional, para quem já usa.</p>
+        <p style='font-size:12px'>• USB/OTG: selecione um serviço de impressão Android compatível com sua impressora.</p>
+        <p style='font-size:12px'>• Wi‑Fi/IP: use o serviço/plugin Android do fabricante ou um serviço ESC/POS instalado.</p>
+        <p style='font-size:12px'>• Bluetooth direto: disponível quando o sistema for empacotado como app Android com acesso nativo ao Bluetooth.</p>
+      </details>
+    </div>
+    <script>
+    const TEXTO_IMPRESSAO={texto_json};
+    async function compartilharImpressao(){{
+      if(navigator.share){{
+        try{{
+          await navigator.share({{title:'BRECHÓ GETRES',text:TEXTO_IMPRESSAO}});
+          return;
+        }}catch(e){{}}
+      }}
+      try{{
+        await navigator.clipboard.writeText(TEXTO_IMPRESSAO);
+        alert('Conteúdo copiado. Abra seu aplicativo de impressão e cole/envie.');
+      }}catch(e){{
+        alert('Use ANDROID / IMPRESSÃO PADRÃO para escolher um serviço de impressão instalado.');
+      }}
+    }}
+    async function copiarEscPos(){{
+      try{{
+        await navigator.clipboard.writeText(TEXTO_IMPRESSAO);
+        alert('Texto copiado para uso em app ESC/POS, RawBT ou plugin da impressora.');
+      }}catch(e){{
+        alert('Não foi possível copiar. Use o botão de impressão padrão.');
+      }}
+    }}
+    </script>
+    """
 
 @app.route("/logo-getres")
 def logo_getres():
@@ -435,7 +528,10 @@ document.getElementById('produtoForm').addEventListener('submit',async function(
 @app.route("/novo",methods=["GET","POST"])
 @app.route("/editar/<int:pid>",methods=["GET","POST"])
 def produto_form(pid=None):
-    c=db(); r=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone() if pid else None
+    c=db()
+    if pid:
+        reparar_fotos_produto(c,pid); c.commit()
+    r=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone() if pid else None
     if request.method=="POST":
         img=r["imagem"] if r else ""; old_img=img
         if request.form.get("remover_imagem")=="1":
@@ -454,7 +550,8 @@ def produto_form(pid=None):
         else:
             cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals); produto_id=cur.lastrowid
         if novos_dados:
-            existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(produto_id,)).fetchone()["n"] or 0)
+            reparar_fotos_produto(c,produto_id)
+            existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0",(produto_id,)).fetchone()["n"] or 0)
             vagas=max(0,6-existentes)
             if vagas:
                 c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
@@ -487,12 +584,13 @@ def excluir(pid):
 @app.route("/galeria/<int:pid>")
 def galeria(pid):
     c=db()
+    reparar_fotos_produto(c,pid); c.commit()
     p=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone()
     if not p:
         c.close()
         return "Produto não encontrado",404
 
-    rows=c.execute("SELECT arquivo FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall()
+    rows=c.execute("SELECT arquivo FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 ORDER BY principal DESC,id DESC",(pid,)).fetchall()
     arquivos=[]
     if p["imagem"]:
         arquivos.append(p["imagem"])
@@ -539,9 +637,10 @@ def galeria(pid):
 def fotos(pid):
     c=db(); p=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone()
     if not p: c.close(); return "Produto não encontrado",404
+    reparar_fotos_produto(c,pid); c.commit()
     if request.method=="POST":
         fs=[f for f in request.files.getlist("fotos") if f and f.filename]
-        existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(pid,)).fetchone()["n"] or 0); vagas=max(0,6-existentes)
+        existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0",(pid,)).fetchone()["n"] or 0); vagas=max(0,6-existentes)
         for f in fs[:vagas]:
             ext=os.path.splitext(f.filename)[1].lower() or ".jpg"; arq=secrets.token_hex(10)+ext; dados=f.read(); mime=f.mimetype or "image/jpeg"
             if not dados: continue
@@ -549,7 +648,7 @@ def fotos(pid):
             c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,arq,principal,psycopg2.Binary(dados),mime))
             if principal: c.execute("UPDATE produtos SET imagem=? WHERE id=?",(arq,pid))
         c.commit(); c.close(); return redirect("/fotos/"+str(pid))
-    rows=c.execute("SELECT id,produto_id,arquivo,principal FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
+    rows=c.execute("SELECT id,produto_id,arquivo,principal FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
     cards=""
     for f in rows:
         cards+=f"""<div class=card><img src='/foto-arquivo/{f["arquivo"]}'><div class=pad>
@@ -594,17 +693,26 @@ def etiqueta(pid):
     c=db();p=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone();c.close()
     if not p:return "Produto não encontrado",404
     codigo=f"GETRES-{pid:05d}"
-    qr=qr_data_uri(codigo); C=conf()
+    qr=qr_data_uri(codigo); C=conf(); largura=largura_impressao_mm(C)
     logo_uri=logo_data_uri()
     logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
-    return f"""<!doctype html><meta name=viewport content='width=device-width'>
-    <style>body{{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}}
-    h1{{font-size:18px}}.preco{{font-size:23px;font-weight:bold}}img{{width:27mm;height:27mm}}
-    button{{width:100%;padding:12px}}@media print{{button{{display:none}}}}</style>
-    <div style="display:flex;align-items:center;justify-content:center;gap:2mm;margin-bottom:2mm">{logo}<h1 style="margin:0;font-size:3.2mm;line-height:1;white-space:nowrap;max-width:38mm;margin-left:auto;margin-right:auto">BRECHÓ GETRES</h1></div><b>{codigo}</b><hr>
+    texto=(f"BRECHÓ GETRES\\n{codigo}\\n{p['nome']}\\n{p['time_nome']}\\n"
+           f"Tam: {p['tamanho']} - {p['estado']}\\nR$ {p['preco']:.2f}\\n{codigo}")
+    botoes=botoes_impressao(texto)
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
+    <style>
+    @page{{size:{largura}mm auto;margin:0}}
+    *{{box-sizing:border-box}}
+    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;text-align:center;font:12px monospace;color:#000;background:#fff}}
+    h1{{font-size:18px}}.preco{{font-size:23px;font-weight:bold}}.qr{{width:27mm;height:27mm;object-fit:contain}}
+    button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}.acoes-impressao{{margin-top:8px}}
+    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
+    </style></head><body>
+    <div style="display:flex;align-items:center;justify-content:center;gap:2mm;margin-bottom:2mm">{logo}<h1 style="margin:0;font-size:3.2mm;line-height:1;white-space:nowrap">BRECHÓ GETRES</h1></div>
+    <b>{codigo}</b><hr>
     <b>{p["nome"]}</b><p>{p["time_nome"]}<br>Tam: {p["tamanho"]} • {p["estado"]}</p>
-    <div class=preco>R$ {p["preco"]:.2f}</div><img src='{qr}'><br><b>{codigo}</b>
-    <button onclick=print()>🖨 IMPRIMIR ETIQUETA</button>"""
+    <div class=preco>R$ {p["preco"]:.2f}</div><img class=qr src='{qr}'><br><b>{codigo}</b>
+    {botoes}</body></html>"""
 
 
 @app.route("/carrinho")
@@ -770,7 +878,8 @@ def vender():
     for pid in ids: contagem[pid]=contagem.get(pid,0)+1
     c=db(); itens=[]; total=0.0
     try:
-        # Trava e valida todos os produtos sem baixar estoque ainda.
+        # Trava, valida e reserva o estoque no momento em que a venda é finalizada.
+        # Confirmar pagamento depois não baixa novamente.
         for pid,qtd in contagem.items():
             r=c.execute("SELECT * FROM produtos WHERE id=? AND COALESCE(ativo,1)=1 FOR UPDATE",(pid,)).fetchone()
             if not r or int(r["estoque"] or 0)<qtd:
@@ -779,6 +888,7 @@ def vender():
             for _ in range(qtd):
                 itens.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":float(r["preco"] or 0)})
                 total+=float(r["preco"] or 0)
+            c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
         if not itens or total<=0: raise ValueError("Não é possível finalizar uma venda com total R$ 0,00.")
         tipo_entrega=d.get("tipo_entrega","retirada")
         taxa=0.0
@@ -787,7 +897,7 @@ def vender():
             except Exception: taxa=0.0
         total+=taxa
         cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,0))
+                      (datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,1))
         vid=cur.lastrowid; c.commit(); c.close(); return {"ok":True,"id":vid}
     except Exception as e:
         c.rollback(); c.close(); return {"ok":False,"erro":str(e)},409
@@ -874,10 +984,31 @@ def cancelar_pedido(vid):
 @app.route("/comprovante/<int:vid>")
 def comprovante(vid):
     c=db();v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone();c.close();C=conf()
-    itens=json.loads(v["itens"]);linhas="".join(f"<p style='overflow-wrap:anywhere'>{x['nome']} {x['tamanho']}<br>R$ {x['preco']:.2f}</p>" for x in itens)
-    logo_uri=logo_data_uri()
+    if not v:return "Venda não encontrada",404
+    itens=json.loads(v["itens"] or "[]")
+    linhas="".join(f"<p style='overflow-wrap:anywhere;margin:5px 0'>{x['nome']} {x.get('tamanho','')}<br>R$ {float(x['preco']):.2f}</p>" for x in itens)
+    logo_uri=logo_data_uri(); largura=largura_impressao_mm(C)
     logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
-    return f"""<!doctype html><meta name=viewport content='width=device-width'><style>body{{width:54mm;margin:auto;font:12px monospace;color:#000;background:#fff;text-align:center}}hr{{border:0;border-top:1px dashed}}button{{width:100%;padding:12px}}.marca{{display:flex;align-items:center;justify-content:center;gap:5px}}@media print{{button{{display:none}}}}</style><div class=marca>{logo}<h2 style="margin:0;font-size:15px;line-height:1;white-space:nowrap">{C['nome']}</h2></div><p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr><p>{'ENTREGA - Taxa R$ %.2f' % v['taxa_entrega'] if v['tipo_entrega']=='entrega' else 'RETIRADA NO LOCAL'}</p><h3>TOTAL R$ {v['total']:.2f}</h3><p>{v['pagamento']}<br>{C['mensagem']}</p><button onclick=print()>IMPRIMIR / RAWBT</button>"""
+    itens_txt="\\n".join(f"{x['nome']} {x.get('tamanho','')} - R$ {float(x['preco']):.2f}" for x in itens)
+    entrega_txt=(f"ENTREGA - Taxa R$ {float(v['taxa_entrega'] or 0):.2f}" if v["tipo_entrega"]=="entrega" else "RETIRADA NO LOCAL")
+    texto=(f"{C.get('nome','BRECHÓ GETRES')}\\n{C.get('cnpj','')}\\n{C.get('endereco','')}\\n"
+           f"COMPROVANTE #{vid}\\n{itens_txt}\\n{entrega_txt}\\nTOTAL R$ {float(v['total']):.2f}\\n"
+           f"{v['pagamento']}\\n{C.get('mensagem','')}")
+    botoes=botoes_impressao(texto)
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
+    <style>
+    @page{{size:{largura}mm auto;margin:0}}
+    *{{box-sizing:border-box}}
+    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;font:12px monospace;color:#000;background:#fff;text-align:center}}
+    hr{{border:0;border-top:1px dashed #000}}button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}
+    .marca{{display:flex;align-items:center;justify-content:center;gap:5px}}.acoes-impressao{{margin-top:8px}}
+    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
+    </style></head><body>
+    <div class=marca>{logo}<h2 style="margin:0;font-size:15px;line-height:1;white-space:nowrap">{C['nome']}</h2></div>
+    <p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr>
+    <p>{entrega_txt}</p><h3>TOTAL R$ {float(v['total']):.2f}</h3>
+    <p>{v['pagamento']}<br>{C['mensagem']}</p>{botoes}</body></html>"""
+
 
 @app.route("/pedidos")
 def pedidos():
@@ -969,8 +1100,11 @@ def estatisticas():
 def config():
     if request.method=="POST":
         c=db()
-        for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem","impressora","taxa_entrega"]:
-            c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(k,request.form.get(k,"")))
+        for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem",
+                  "impressora","largura_papel","impressora_nome","impressora_ip","impressora_porta",
+                  "taxa_entrega"]:
+            c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",
+                      (k,request.form.get(k,"")))
         logo=request.files.get("logo")
         if logo and logo.filename:
             dados=logo.read(); mime=logo.mimetype or "image/png"
@@ -978,19 +1112,100 @@ def config():
                 uri="data:"+mime+";base64,"+base64.b64encode(dados).decode("ascii")
                 c.execute("INSERT INTO config(chave,valor) VALUES('logo',?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(uri,))
         c.commit();c.close();return redirect("/config")
-    C=conf();labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX","whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço","mensagem":"Mensagem do comprovante","impressora":"Impressora","taxa_entrega":"Taxa de entrega (R$)"}
-    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>{''}" for k in labels)
-    return page("Configurações",f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta. A nova logo fica salva no Supabase.</p><button style='width:100%'>SALVAR</button></form>")
+
+    C=conf()
+    labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX",
+            "whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço",
+            "mensagem":"Mensagem do comprovante","taxa_entrega":"Taxa de entrega (R$)"}
+    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C.get(k,'')}'>" for k in labels)
+
+    modo=str(C.get("impressora","android") or "android")
+    larg=str(C.get("largura_papel","58"))
+    def selected(v): return "selected" if modo==v else ""
+    sel58="selected" if larg!="80" else ""
+    sel80="selected" if larg=="80" else ""
+
+    printer=f"""
+    <h3>🖨️ Impressora térmica</h3>
+    <label>Método de impressão</label>
+    <select name='impressora'>
+      <option value='android' {selected('android')}>Android padrão — recomendado e gratuito</option>
+      <option value='compartilhar' {selected('compartilhar')}>Compartilhar para aplicativo de impressão</option>
+      <option value='escpos' {selected('escpos')}>ESC/POS genérico</option>
+      <option value='usb' {selected('usb')}>USB / OTG via serviço Android</option>
+      <option value='wifi' {selected('wifi')}>Wi‑Fi / IP via serviço/plugin Android</option>
+      <option value='rawbt' {selected('rawbt')}>RawBT — opcional</option>
+      <option value='bluetooth_nativo' {selected('bluetooth_nativo')}>Bluetooth direto — para futura versão Android nativa</option>
+    </select>
+
+    <label>Largura do papel</label>
+    <select name='largura_papel'>
+      <option value='58' {sel58}>58 mm — portátil mais comum</option>
+      <option value='80' {sel80}>80 mm — recibo largo</option>
+    </select>
+
+    <label>Nome/modelo da impressora</label>
+    <input name='impressora_nome' value='{C.get("impressora_nome","")}' placeholder='Ex.: XPrinter XP-P323B, Elgin, Epson...'>
+
+    <label>IP da impressora (opcional)</label>
+    <input name='impressora_ip' value='{C.get("impressora_ip","")}' placeholder='Ex.: 192.168.1.50'>
+
+    <label>Porta ESC/POS (opcional)</label>
+    <input name='impressora_porta' value='{C.get("impressora_porta","9100")}' inputmode='numeric'>
+
+    <div class=box style='margin-top:12px'>
+      <b>Compatibilidade</b>
+      <p class=muted>O app não exige RawBT. Você pode usar o serviço de impressão gratuito do Android, plugin do fabricante, USB/OTG, Wi‑Fi/IP, compartilhamento ou outro app ESC/POS instalado.</p>
+      <p class=muted>Bluetooth clássico direto não é universal dentro do navegador; por isso fica reservado para uma futura versão Android nativa/híbrida.</p>
+    </div>
+
+    <a class=btn href='/teste'>🧾 TESTAR IMPRESSORA</a>
+    """
+    return page("Configurações",
+        f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}{printer}"
+        f"<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'>"
+        f"<p class=muted>Usada no comprovante e etiqueta. A nova logo fica salva no Supabase.</p>"
+        f"<button style='width:100%'>SALVAR</button></form>")
+
 
 @app.route("/teste")
 def teste():
-    return """<!doctype html><meta name=viewport content='width=device-width'><style>body{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}button{width:100%;padding:12px}@media print{button{display:none}}</style><h2>BRECHÓ GETRES</h2><p>TESTE 58 mm<br>RawBT / KA-1445</p><p>------------------------------</p><p>Se tudo sair completo,<br>a largura está correta.</p><button onclick=print()>IMPRIMIR</button>"""
+    C=conf(); largura=largura_impressao_mm(C)
+    texto=(f"BRECHÓ GETRES\\nTESTE DE IMPRESSÃO\\n"
+           f"Método: {C.get('impressora','android')}\\n"
+           f"Papel: {C.get('largura_papel','58')} mm\\n"
+           f"Modelo: {C.get('impressora_nome','')}\\n"
+           f"ABCDEFGHIJKLMNOPQRSTUVWXYZ\\n0123456789\\n"
+           f"Se este texto saiu completo, a largura está correta.")
+    botoes=botoes_impressao(texto)
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
+    <style>
+    @page{{size:{largura}mm auto;margin:0}}
+    *{{box-sizing:border-box}}
+    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;text-align:center;font:12px monospace;color:#000;background:#fff}}
+    button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}.acoes-impressao{{margin-top:8px}}
+    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
+    </style></head><body>
+    <h2>BRECHÓ GETRES</h2>
+    <p>TESTE TÉRMICO {C.get('largura_papel','58')} mm</p>
+    <p>Método: {C.get('impressora','android')}</p>
+    <p>{C.get('impressora_nome','')}</p>
+    <p>------------------------------</p>
+    <p>ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>0123456789</p>
+    <p>Se tudo sair completo,<br>a largura está correta.</p>
+    {botoes}</body></html>"""
 
 
 @app.route("/status-banco")
 def status_banco():
-    c=db(); p=c.execute("SELECT COUNT(*) n FROM produtos").fetchone()["n"]; v=c.execute("SELECT COUNT(*) n FROM vendas").fetchone()["n"]; f=c.execute("SELECT COUNT(*) n FROM fotos").fetchone()["n"]; c.close()
-    return {"ok":True,"backend":"postgresql/supabase","persistente":True,"produtos":int(p),"vendas":int(v),"fotos":int(f)}
+    c=db()
+    p=c.execute("SELECT COUNT(*) n FROM produtos").fetchone()["n"]
+    v=c.execute("SELECT COUNT(*) n FROM vendas").fetchone()["n"]
+    f=c.execute("SELECT COUNT(*) n FROM fotos").fetchone()["n"]
+    fv=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NOT NULL AND octet_length(dados)>0").fetchone()["n"]
+    fq=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NULL OR octet_length(dados)=0").fetchone()["n"]
+    c.close()
+    return {"ok":True,"backend":"postgresql/supabase","persistente":True,"produtos":int(p),"vendas":int(v),"fotos":int(f),"fotos_validas":int(fv),"fotos_quebradas":int(fq)}
 
 @app.route("/manifest.json")
 def manifest():
@@ -1001,7 +1216,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-app7-final-v11';
+const CACHE='getres-final-v14-impressao-multimodo';
 const ROUTES=[
   '/?menu=1',
   '/destaques',
