@@ -805,7 +805,7 @@ document.getElementById('produtoForm').addEventListener('submit',async function(
  ev.preventDefault();
  const fd=new FormData(this), fotos=[...(fi.files||[])].slice(0,6), imagens=[];
  for(const f of fotos) imagens.push(await fileDataURL(f));
- const p={{offline_id:'prod-'+Date.now()+'-'+Math.random().toString(16).slice(2),nome:fd.get('nome')||'',time_nome:fd.get('time_nome')||'',categoria:fd.get('categoria')||'',tamanho:fd.get('tamanho')||'',estado:fd.get('estado')||'',preco:Number(String(fd.get('preco')||'0').replace(',','.')),estoque:Number(fd.get('estoque')||0),descricao:fd.get('descricao')||'',imagens:imagens,criado_em:new Date().toISOString()}};
+ const p={{offline_id:'prod-'+Date.now()+'-'+Math.random().toString(16).slice(2),produto_id:{str(r['id']) if r else 'null'},operacao:{'"editar"' if r else '"novo"'},nome:fd.get('nome')||'',time_nome:fd.get('time_nome')||'',categoria:fd.get('categoria')||'',tamanho:fd.get('tamanho')||'',estado:fd.get('estado')||'',preco:Number(String(fd.get('preco')||'0').replace(',','.')),estoque:Number(fd.get('estoque')||0),descricao:fd.get('descricao')||'',imagens:imagens,criado_em:new Date().toISOString()}};
  let q=getOfflineProducts();q.unshift(p);setOfflineProducts(q);alert('Produto e fotos salvos OFFLINE. Serão sincronizados quando a internet voltar.');location='/produtos';
 }});
 </script>"""
@@ -1252,10 +1252,25 @@ def sync_offline_product():
             try: dados=base64.b64decode(b64)
             except Exception: continue
             if dados: arquivos.append((arq,dados,mime))
-        img=arquivos[0][0] if arquivos else ""
-        cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid)); pid=cur.lastrowid
-        for i,(a,dados,mime) in enumerate(arquivos): c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,a,1 if i==0 else 0,psycopg2.Binary(dados),mime))
-        c.commit();c.close();return {"ok":True,"id":pid}
+        produto_id=d.get("produto_id")
+        if produto_id:
+            atual=c.execute("SELECT id FROM produtos WHERE id=?",(int(produto_id),)).fetchone()
+            if not atual:
+                raise ValueError("Produto original não encontrado para edição offline.")
+            c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,descricao=? WHERE id=?",
+                      (d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),d.get("descricao",""),int(produto_id)))
+            pid=int(produto_id)
+            if arquivos:
+                c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(pid,))
+                for i,(a,dados,mime) in enumerate(arquivos):
+                    c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,a,1 if i==0 else 0,psycopg2.Binary(dados),mime))
+                a,dados,mime=arquivos[0]
+                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",(a,psycopg2.Binary(dados),mime,pid))
+        else:
+            img=arquivos[0][0] if arquivos else ""
+            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid)); pid=cur.lastrowid
+            for i,(a,dados,mime) in enumerate(arquivos): c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,a,1 if i==0 else 0,psycopg2.Binary(dados),mime))
+        c.commit();c.close();return {"ok":True,"id":pid,"operacao":"editar" if produto_id else "novo"}
     except Exception as e:
         c.rollback();c.close();return {"ok":False,"erro":str(e)},400
 
