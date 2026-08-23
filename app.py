@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V21 — PEDIDOS OFFLINE GARANTIDO
+# BRECHÓ GETRES — FINAL V22 — OFFLINE CARRINHO/PEDIDOS/CONFIRMAÇÃO CORRIGIDOS
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -355,6 +355,28 @@ function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_
 function setOfflineHistory(h){localStorage.setItem("getres_offline_history",JSON.stringify(h))}
 function getOfflineProducts(){try{return JSON.parse(localStorage.getItem("getres_offline_products")||"[]")}catch(e){return []}}
 function setOfflineProducts(q){localStorage.setItem("getres_offline_products",JSON.stringify(q))}
+function getOfflineActions(){try{return JSON.parse(localStorage.getItem("getres_offline_actions")||"[]")}catch(e){return []}}
+function setOfflineActions(q){localStorage.setItem("getres_offline_actions",JSON.stringify(q))}
+function queueOfflineAction(tipo,vid){
+  let q=getOfflineActions();
+  if(!q.some(x=>x.tipo===tipo&&Number(x.vid)===Number(vid))) q.push({tipo:tipo,vid:Number(vid),criado_em:new Date().toISOString()});
+  setOfflineActions(q);showNetStatus();
+}
+async function syncOfflineActions(){
+  if(!navigator.onLine)return; let q=getOfflineActions(); if(!q.length)return; const rest=[];
+  for(const a of q){try{
+    const rota=a.tipo==='confirmar'?('/confirmar-pagamento/'+a.vid):(a.tipo==='cancelar'?('/cancelar-pedido/'+a.vid):'');
+    if(!rota)continue; const r=await fetch(rota,{method:'POST',redirect:'follow'}); if(!r.ok)rest.push(a);
+  }catch(e){rest.push(a)}}
+  setOfflineActions(rest);showNetStatus();
+}
+document.addEventListener('submit',function(ev){
+  const f=ev.target;if(!f||navigator.onLine)return; const ac=f.getAttribute('action')||'';
+  let m=ac.match(/^\/confirmar-pagamento\/(\d+)$/);
+  if(m){ev.preventDefault();queueOfflineAction('confirmar',Number(m[1]));alert('Pagamento confirmado OFFLINE. A confirmação será enviada automaticamente quando a internet voltar.');location='/pedidos';return}
+  m=ac.match(/^\/cancelar-pedido\/(\d+)$/);
+  if(m){ev.preventDefault();queueOfflineAction('cancelar',Number(m[1]));alert('Cancelamento salvo OFFLINE. Será enviado automaticamente quando a internet voltar.');location='/pedidos'}
+},true);
 async function fileDataURL(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)})}
 async function syncOfflineProducts(){
   if(!navigator.onLine)return; let q=getOfflineProducts(); if(!q.length)return; const rest=[];
@@ -409,7 +431,7 @@ async function syncOfflineSales(){
   if(typeof renderPedidosOffline==="function")renderPedidosOffline();
   if(rest.length===0)refreshOfflineCatalog();
 }
-window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales()});
+window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales();syncOfflineActions()});
 window.addEventListener("offline",showNetStatus);
 document.addEventListener("DOMContentLoaded",()=>{
   showNetStatus();
@@ -420,6 +442,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     refreshOfflineCatalog();
     syncOfflineProducts();
     syncOfflineSales();
+    syncOfflineActions();
   }
 });
 </script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
@@ -470,7 +493,7 @@ def destaques():
     for r in rows:
         tem_foto=bool(r.get("tem_foto"))
         foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/produto-foto/"+str(r["id"])+"?v="+str(int(datetime.now().timestamp()))+"' alt='Ver fotos'></a>") if tem_foto else "<div class=pic>👕</div>"
-        cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
+        cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button {'disabled style="opacity:.45"' if int(r['estoque'] or 0)<=0 else ''} onclick="if({int(r['estoque'] or 0)}<=0){{alert('Produto sem estoque.');return}}let c=JSON.parse(localStorage.g3cart||'[]');let qtd=c.filter(i=>Number(i)==={r['id']}).length;if(qtd>={int(r['estoque'] or 0)}){{alert('Estoque máximo deste produto já está no carrinho.');return}}c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">{'+ Carrinho' if int(r['estoque'] or 0)>0 else 'SEM ESTOQUE'}</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
     if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
     offline_js=r"""
 <script>
@@ -502,7 +525,7 @@ def destaques():
     const preco=Number(p.preco||0).toFixed(2);
     const img=foto ? `<img src="${esc(foto)}" alt="Produto">` : `<div class="pic">👕</div>`;
     const id=Number(p.id||0);
-    const carrinho=id ? `<button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push(${id});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button>` : '';
+    const est=Number(p.estoque||0); const carrinho=id ? (est>0?`<button onclick="let c=JSON.parse(localStorage.g3cart||'[]');let qtd=c.filter(i=>Number(i)===${id}).length;if(qtd>=${est}){alert('Estoque máximo deste produto já está no carrinho.');return}c.push(${id});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button>`:`<button disabled style="opacity:.45">SEM ESTOQUE</button>`) : '';
     return `<div class="card">${img}<div class="pad"><b>${esc(p.nome||'Blusa')}</b>
       <div class="muted">${esc(p.tamanho||'')} • ${esc(p.estado||'')} • estoque ${esc(p.estoque||0)}</div>
       <div class="price">R$ ${preco}</div>${pendente?'<div class="muted">⏳ Aguardando sincronização</div>':carrinho}</div></div>`;
@@ -983,19 +1006,22 @@ function atualizarTotal(){taxaInfo.textContent=entrega.value==='entrega'?`Entreg
 function uuidOffline(){return 'getres-'+Date.now()+'-'+Math.random().toString(16).slice(2)}
 function salvarOffline(){
   const d=window.d||[]; if(!d.length)return alert('Não há dados do produto salvos para vender offline.');
+  const qtd={}; ids.forEach(id=>qtd[Number(id)]=(qtd[Number(id)]||0)+1);
+  for(const x of d){const precisa=qtd[Number(x.id)]||0,disp=Number(x.estoque||0);if(precisa>disp){alert('Estoque insuficiente para '+x.nome+'. Disponível: '+disp);return}}
   const sale={
     offline_id:uuidOffline(),
     criado_em:new Date().toISOString(),
     pagamento:pag.value,
     tipo_entrega:entrega.value,
     taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,
+    total:subtotal+(entrega.value==='entrega'?taxaEntrega:0),
     itens:d.map(x=>({id:Number(x.id),nome:x.nome,tamanho:x.tamanho||'',preco:Number(x.preco)}))
   };
   let q=getOfflineQueue();q.push(sale);setOfflineQueue(q);
   saveOfflineHistory(sale,'PENDENTE',null,'');
   // baixa o estoque do catálogo local imediatamente; o servidor fará a mesma baixa uma única vez na sincronização.
-  let cat=catalogoLocal(); const qtd={}; sale.itens.forEach(x=>qtd[x.id]=(qtd[x.id]||0)+1);
-  cat=cat.map(x=>qtd[x.id]?({...x,estoque:Math.max(0,Number(x.estoque||0)-qtd[x.id])}):x);
+  let cat=catalogoLocal(); const qtdBaixa={}; sale.itens.forEach(x=>qtdBaixa[x.id]=(qtdBaixa[x.id]||0)+1);
+  cat=cat.map(x=>qtdBaixa[x.id]?({...x,estoque:Math.max(0,Number(x.estoque||0)-qtdBaixa[x.id])}):x);
   localStorage.setItem('getres_catalogo',JSON.stringify(cat));
   localStorage.removeItem('g3cart');
   showNetStatus();
@@ -1247,8 +1273,10 @@ function renderPedidosOffline(){
   const idsPendentes=new Set(pendentes.map(p=>p.offline_id));
   const sincronizados=h.filter(p=>!idsPendentes.has(p.offline_id) && p.local_status==='SINCRONIZADO').slice(0,5);
   const lista=[...pendentes,...sincronizados];
-  if(!lista.length){el.innerHTML='';return}
-  el.innerHTML=lista.map((p,i)=>{
+  const acoes=getOfflineActions();
+  const avisos=acoes.map(a=>`<div class=box style="border-color:#2f8f46"><b>${a.tipo==='confirmar'?'✅ Pagamento confirmado offline':'❌ Cancelamento salvo offline'} • Venda #${a.vid}</b><div class=muted>Será sincronizado automaticamente quando a internet voltar.</div></div>`).join('');
+  if(!lista.length&&!acoes.length){el.innerHTML='';return}
+  el.innerHTML=avisos+lista.map((p,i)=>{
     const subtotal=(p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0);
     const total=subtotal+Number(p.taxa_entrega||0);
     const pendente=p.local_status!=='SINCRONIZADO';
@@ -1441,7 +1469,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v21-pedidos-offline-garantido';
+const CACHE='getres-final-v22-offline-confirmacao-estoque';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
