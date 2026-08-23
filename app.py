@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V27 — VENDA SINCRONIZADA ABRE OFFLINE
+# BRECHÓ GETRES — FINAL V28 — CONTADOR DE SINCRONIZAÇÃO OFFLINE
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -547,14 +547,14 @@ document.addEventListener("click",function(ev){
 
 function showNetStatus(){
   const el=document.getElementById("netStatus"); if(!el)return;
-  const q=getOfflineQueue();
-  if(!navigator.onLine){
-    el.style.display="block";el.style.background="#7a1f1f";el.style.color="#fff";
-    el.textContent="OFFLINE • "+q.length+" pedido(s) aguardando sincronização";
-  }else if(q.length){
-    el.style.display="block";el.style.background="#7a5a12";el.style.color="#fff";
-    el.textContent="ONLINE • sincronizando "+q.length+" pedido(s)...";
-  }else{el.style.display="none"}
+  if(navigator.onLine){el.style.display="none";return}
+  const n=getOfflineQueue().length;
+  const a=getOfflineActions().length;
+  el.style.display="block";
+  if(n>0 && a>0) el.textContent="📴 OFFLINE • "+n+" pedido(s) + "+a+" ação(ões) aguardando sincronização";
+  else if(n>0) el.textContent="📴 OFFLINE • "+n+" pedido(s) aguardando sincronização";
+  else if(a>0) el.textContent="📴 OFFLINE • "+a+" ação(ões) aguardando sincronização";
+  else el.textContent="📴 OFFLINE • tudo sincronizado";
 }
 async function refreshOfflineCatalog(){
   if(!navigator.onLine)return;
@@ -1676,7 +1676,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-9-ABRIR-VENDA-OFFLINE","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-10-CONTADOR-SYNC","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1698,7 +1698,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v27-abrir-venda-offline';
+const CACHE='getres-final-v28-contador-sync';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
