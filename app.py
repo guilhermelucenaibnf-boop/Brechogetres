@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V22 — OFFLINE CARRINHO/PEDIDOS/CONFIRMAÇÃO CORRIGIDOS
+# BRECHÓ GETRES — FINAL V23 — PEDIDOS E VENDA OFFLINE CORRIGIDOS
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -1261,6 +1261,14 @@ def comprovante(vid):
 def pedidos():
     c=db();rows=c.execute("SELECT * FROM vendas ORDER BY id DESC").fetchall();c.close()
     x="<h2>Pedidos</h2><div id=pedidosOffline></div>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
+    server_orders=json.dumps([{
+        "id":int(r["id"]),
+        "total":float(r["total"] or 0),
+        "status":str(r["status"] or "AGUARDANDO_PAGAMENTO"),
+        "pagamento":str(r["pagamento"] or ""),
+        "tipo_entrega":str(r["tipo_entrega"] or "retirada")
+    } for r in rows],ensure_ascii=False)
+    x+="<script>try{localStorage.setItem('getres_server_orders',JSON.stringify("+server_orders+"))}catch(e){}</script>"
     x+="""<script>
 function renderPedidosOffline(){
   const el=document.getElementById('pedidosOffline');if(!el)return;
@@ -1447,7 +1455,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-4-PEDIDOS-OFFLINE-GARANTIDO","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-5-OFFLINE-PEDIDOS-VENDA","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1469,14 +1477,12 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v22-offline-confirmacao-estoque';
+const CACHE='getres-final-v23-offline-pedidos-venda';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
   e.waitUntil((async()=>{
     const c=await caches.open(CACHE);
-    // Tenta salvar as telas essenciais enquanto há internet.
-    // Se alguma falhar, a instalação continua normalmente.
     for(const url of OFFLINE_PAGES){
       try{
         const r=await fetch(url,{cache:'no-store'});
@@ -1495,92 +1501,126 @@ self.addEventListener('activate',e=>{
   );
 });
 
-function chavePagina(url){
-  // Para telas principais, ignora query-string.
-  // Assim /pedidos?offline=1 usa o mesmo cache de /pedidos.
-  if(['/destaques','/produtos','/carrinho','/pedidos'].includes(url.pathname)){
-    return url.pathname;
-  }
-  if(url.pathname==='/') return '/?menu=1';
-  return url.pathname+(url.search||'');
+function pedidosOfflineHtml(){
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pedidos - BRECHÓ GETRES</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
+main{width:min(100%,560px);margin:auto;padding:20px 18px 80px}.brand{text-align:center;color:#e7a92d;font-weight:900;font-size:25px;margin:16px 0 24px}
+h1{font-size:28px}.box{border:1px solid #8a6422;border-radius:16px;padding:16px;margin:12px 0;background:#111;color:#fff;text-decoration:none;display:block}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.muted{color:#bbb;font-size:14px;margin-top:5px}
+.price{color:#e7a92d;font-size:20px;font-weight:900}.btn{display:inline-block;border:0;border-radius:11px;padding:14px 17px;background:#efad29;color:#111;font-weight:900;text-decoration:none}
+.danger{width:100%;margin-top:12px;border:0;border-radius:10px;padding:12px;background:#8b2025;color:#fff;font-weight:800}
+.net{padding:10px 14px;text-align:center;background:#7a1f1f;font-size:13px;font-weight:800}
+.notice{border-color:#2f8f46}
+</style></head><body>
+<div class="net" id="net"></div>
+<main><div class="brand">♧ BRECHÓ GETRES</div><a class="btn" href="/?menu=1">← VOLTAR</a>
+<h1>Pedidos</h1><div id="lista"></div></main>
+<script>
+function get(k,d){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(d))}catch(e){return d}}
+function set(k,v){localStorage.setItem(k,JSON.stringify(v))}
+function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function render(){
+ const fila=get('getres_offline_sales',[]);
+ let hist=get('getres_offline_history',[]);
+ const acoes=get('getres_offline_actions',[]);
+ const srv=get('getres_server_orders',[]);
+ fila.forEach(p=>{if(!hist.some(x=>x.offline_id===p.offline_id))hist.unshift({...p,local_status:'PENDENTE'})});
+ set('getres_offline_history',hist.slice(0,100));
+ document.getElementById('net').textContent='OFFLINE • '+fila.length+' pedido(s) aguardando sincronização';
+
+ const idsPend=new Set(fila.map(x=>x.offline_id));
+ const offline=hist.filter(x=>idsPend.has(x.offline_id)||x.local_status==='PENDENTE');
+ const avisos=acoes.map(a=>`<div class="box notice"><b>${a.tipo==='confirmar'?'✅ Pagamento confirmado offline':'❌ Cancelamento salvo offline'} • Venda #${a.vid}</b><div class="muted">Será sincronizado automaticamente quando a internet voltar.</div></div>`).join('');
+
+ const offHtml=offline.map(p=>{
+   const total=Number(p.total||0);
+   return `<div class="box"><div class="row"><div><b>📴 Pedido offline</b><div class="muted">⏳ AGUARDANDO SINCRONIZAÇÃO</div><div class="muted">${esc(p.pagamento||'')}</div></div><div class="price">R$ ${total.toFixed(2).replace('.',',')}</div></div>
+   <button class="danger" data-off="${esc(p.offline_id||'')}">🗑️ EXCLUIR PEDIDO OFFLINE</button></div>`;
+ }).join('');
+
+ const srvHtml=srv.map(v=>{
+   const st=v.status||'AGUARDANDO_PAGAMENTO';
+   const rotulo=st==='PAGO'?'✅ PAGO':st==='CANCELADO'?'❌ CANCELADO':'⏳ AGUARDANDO PAGAMENTO';
+   return `<a class="box" href="/venda/${Number(v.id)}"><div class="row"><div><b>Venda #${Number(v.id)}</b><div class="muted">${rotulo}</div></div><div>R$ ${Number(v.total||0).toFixed(2)}</div></div></a>`;
+ }).join('');
+
+ document.getElementById('lista').innerHTML=avisos+offHtml+srvHtml || '<div class="box">Nenhum pedido salvo.</div>';
+ document.querySelectorAll('[data-off]').forEach(b=>b.onclick=()=>{
+   if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
+   const id=b.getAttribute('data-off');
+   set('getres_offline_sales',get('getres_offline_sales',[]).filter(x=>x.offline_id!==id));
+   set('getres_offline_history',get('getres_offline_history',[]).filter(x=>x.offline_id!==id));
+   render();
+ });
+}
+render();
+</script></body></html>`;
+}
+
+function vendaOfflineHtml(vid){
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Venda #${vid}</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
+main{width:min(100%,560px);margin:auto;padding:20px 18px 80px}.brand{text-align:center;color:#e7a92d;font-weight:900;font-size:25px;margin:16px 0 24px}
+.box{border:1px solid #8a6422;border-radius:16px;padding:18px;margin:14px 0;background:#111}.muted{color:#bbb;margin-top:7px}
+.price{color:#e7a92d;font-size:24px;font-weight:900}.btn,button{width:100%;border:0;border-radius:11px;padding:14px 17px;background:#efad29;color:#111;font-weight:900;text-decoration:none;display:block;text-align:center;margin-top:12px}
+.danger{background:#8b2025;color:#fff}.net{padding:10px;text-align:center;background:#7a1f1f;font-size:13px;font-weight:800}
+</style></head><body><div class="net">📴 Sem conexão</div><main>
+<div class="brand">♧ BRECHÓ GETRES</div><a class="btn" href="/pedidos">← PEDIDOS</a>
+<div id="conteudo"></div></main>
+<script>
+const vid=${vid};
+function get(k,d){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(d))}catch(e){return d}}
+function set(k,v){localStorage.setItem(k,JSON.stringify(v))}
+const srv=get('getres_server_orders',[]);
+const v=srv.find(x=>Number(x.id)===Number(vid));
+if(!v){
+ document.getElementById('conteudo').innerHTML='<div class="box"><b>Venda #'+vid+'</b><div class="muted">Os detalhes desta venda não estavam salvos neste aparelho.</div></div>';
+}else{
+ const st=v.status||'AGUARDANDO_PAGAMENTO';
+ let botoes='';
+ if(st!=='PAGO'&&st!=='CANCELADO'){
+   botoes='<button id="confirmar">✅ CONFIRMAR PAGAMENTO OFFLINE</button><button class="danger" id="cancelar">❌ CANCELAR OFFLINE</button>';
+ }
+ document.getElementById('conteudo').innerHTML='<h1>Venda #'+vid+'</h1><div class="box"><div class="price">R$ '+Number(v.total||0).toFixed(2).replace('.',',')+'</div><div class="muted">Status: '+st+'</div><div class="muted">Pagamento: '+(v.pagamento||'')+'</div></div>'+botoes;
+ const q=(tipo)=>{let a=get('getres_offline_actions',[]);if(!a.some(x=>x.tipo===tipo&&Number(x.vid)===vid))a.push({tipo:tipo,vid:vid,criado_em:new Date().toISOString()});set('getres_offline_actions',a);location='/pedidos'};
+ const bc=document.getElementById('confirmar');if(bc)bc.onclick=()=>{if(confirm('Confirmar o pagamento desta venda?'))q('confirmar')};
+ const bx=document.getElementById('cancelar');if(bx)bx.onclick=()=>{if(confirm('Cancelar esta venda?'))q('cancelar')};
+}
+</script></body></html>`;
 }
 
 self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
-
   const url=new URL(req.url);
   if(url.origin!==self.location.origin) return;
 
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
-      const key=chavePagina(url);
+      const key=(['/destaques','/produtos','/carrinho','/pedidos'].includes(url.pathname))
+        ? url.pathname : (url.pathname==='/'?'/?menu=1':url.pathname+(url.search||''));
 
-      // Online: rede primeiro e atualiza o cache daquela mesma tela.
       try{
         const r=await fetch(req,{cache:'no-store'});
         if(r && r.ok) await c.put(key,r.clone());
         return r;
       }catch(_){
-        // Offline: usa a mesma tela pré-carregada.
-        const mesmaPagina=await c.match(key);
-        if(mesmaPagina) return mesmaPagina;
-
-        // Segunda tentativa: algumas páginas podem ter sido guardadas com URL exata.
-        const exata=await c.match(req);
-        if(exata) return exata;
-
-        // /pedidos precisa funcionar mesmo se o HTML online nunca tiver entrado no cache.
-        // A venda offline já foi gravada no localStorage antes do redirecionamento.
         if(url.pathname==='/pedidos'){
-          const html=`<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Pedidos - BRECHÓ GETRES</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
-main{width:min(100%,560px);margin:auto;padding:26px 18px 80px}.brand{text-align:center;color:#e7a92d;font-weight:900;font-size:25px;margin-bottom:28px}
-h1{font-size:28px}.box{border:1px solid #8a6422;border-radius:16px;padding:16px;margin:14px 0;background:#111}
-.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.muted{color:#bbb;font-size:14px;margin-top:5px}
-.price{color:#e7a92d;font-size:21px;font-weight:900}.btn{display:inline-block;border:0;border-radius:11px;padding:14px 17px;background:#efad29;color:#111;font-weight:900;text-decoration:none}
-.danger{width:100%;margin-top:12px;border:0;border-radius:10px;padding:12px;background:#8b2025;color:#fff;font-weight:800}
-.net{padding:10px 14px;text-align:center;background:#171717;font-size:14px}
-</style></head><body>
-<div class="net">📴 Sem conexão — pedidos salvos neste aparelho</div>
-<main><div class="brand">♧ BRECHÓ GETRES</div><a class="btn" href="/">← VOLTAR</a>
-<h1>Pedidos</h1><div id="lista"></div></main>
-<script>
-function fila(){try{return JSON.parse(localStorage.getItem('getres_offline_sales')||'[]')}catch(e){return []}}
-function hist(){try{return JSON.parse(localStorage.getItem('getres_offline_history')||'[]')}catch(e){return []}}
-function salvarFila(q){localStorage.setItem('getres_offline_sales',JSON.stringify(q))}
-function salvarHist(h){localStorage.setItem('getres_offline_history',JSON.stringify(h))}
-function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function render(){
- let q=fila(),h=hist();
- q.forEach(p=>{if(!h.some(x=>x.offline_id===p.offline_id))h.unshift({...p,local_status:'PENDENTE'})});
- salvarHist(h);
- const pend=new Set(q.map(x=>x.offline_id));
- const itens=h.filter(x=>pend.has(x.offline_id)||x.local_status==='PENDENTE').concat(
-   h.filter(x=>!pend.has(x.offline_id)&&x.local_status==='SINCRONIZADO').slice(0,5)
- );
- document.getElementById('lista').innerHTML=itens.length?itens.map(p=>{
-   const total=Number(p.total||0), aguard=pend.has(p.offline_id)||p.local_status==='PENDENTE';
-   const quando=esc(p.criado_em||p.data||'');
-   return '<div class="box"><div class="row"><div><b>📴 Pedido offline</b><div class="muted">'+
-     (aguard?'Aguardando internet para sincronizar':'Sincronizado')+'</div><div class="muted">'+quando+
-     '</div><div class="muted">Pagamento: '+esc(p.pagamento||'')+'</div></div><div class="price">R$ '+total.toFixed(2).replace('.',',')+
-     '</div></div>'+(aguard?'<button class="danger" data-id="'+esc(p.offline_id||'')+'">🗑️ EXCLUIR PEDIDO OFFLINE</button>':'')+'</div>';
- }).join(''):'<div class="box">Nenhum pedido offline salvo neste aparelho.</div>';
- document.querySelectorAll('[data-id]').forEach(b=>b.onclick=()=>{
-   if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
-   const id=b.getAttribute('data-id');salvarFila(fila().filter(x=>x.offline_id!==id));salvarHist(hist().filter(x=>x.offline_id!==id));render();
- });
-}
-render();
-</script></body></html>`;
-          return new Response(html,{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
+          return new Response(pedidosOfflineHtml(),{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
         }
-
+        const mv=url.pathname.match(/^\/venda\/(\d+)$/);
+        if(mv){
+          return new Response(vendaOfflineHtml(Number(mv[1])),{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
+        }
+        const hit=await c.match(key);
+        if(hit) return hit;
         return new Response(
           '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Sem conexão</h2><p>Esta tela ainda não está disponível offline neste aparelho.</p><button onclick="history.back()" style="padding:14px">VOLTAR</button></body>',
           {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
@@ -1590,7 +1630,6 @@ render();
     return;
   }
 
-  // Fotos: rede primeiro para mostrar alterações recentes; cache como alternativa offline.
   if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
@@ -1603,7 +1642,6 @@ render();
         return hit || Response.error();
       }
     })());
-    return;
   }
 });
 """
