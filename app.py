@@ -1,16 +1,14 @@
-# BRECHÓ GETRES — FINAL V30 — PWA INSTALÁVEL COM ÍCONE OFICIAL
+# BRECHO G3 - instalador de versao inicial
 # Execute: python app.py
-import os, json, secrets, re, unicodedata, io, base64
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from psycopg2.pool import ThreadedConnectionPool
+import os, sqlite3, json, secrets, re, unicodedata, io, base64
 from datetime import datetime
 from urllib.parse import quote_plus
-from flask import Flask, request, redirect, session, render_template_string, Response, send_file, abort, g
+from flask import Flask, request, redirect, session, render_template_string
 
 app=Flask(__name__)
 app.secret_key=os.environ.get("SECRET_KEY","brecho-g3-2026")
-DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
+DB="brechog3.db"
+os.makedirs("static/produtos",exist_ok=True)
 
 
 
@@ -51,18 +49,18 @@ def qr_data_uri(text):
         return ""
 
 CSS="""
-*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#000;color:#fff;font-family:Arial,sans-serif}body{font-size:22px}.app{width:100%;max-width:760px;min-height:100dvh;margin:auto;background:#000}header{padding:28px 16px 20px;text-align:center;border-bottom:1px solid #8a6422}.brandline{display:flex;justify-content:center;align-items:center;gap:12px}.brandicon{font-size:42px;color:#e7a92d}.logo{color:#e7a92d;font-size:34px;font-weight:900}.sub{font-size:15px;margin-top:7px;text-transform:uppercase}main{padding:22px 16px 38px}.box{background:linear-gradient(145deg,#171717,#090909);border:1px solid #8a6422;border-radius:22px;padding:20px;margin-bottom:16px}h2{font-size:36px}input,select,textarea{width:100%;padding:15px;margin:6px 0 12px;background:#1b1b1b;color:#fff;border:1px solid #66502a;border-radius:14px;font-size:18px}button,.btn{background:#e7a92d;color:#090909;border:0;border-radius:14px;padding:16px 18px;font-size:19px;font-weight:900;text-decoration:none;display:inline-block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{overflow:hidden;background:#141414;border:1px solid #6e5223;border-radius:19px}.card img,.pic{width:100%;aspect-ratio:1;object-fit:cover}.pic{display:grid;place-items:center;font-size:62px;background:#222}.pad{padding:14px}.price{color:#e9bd50;font-weight:900;font-size:31px;line-height:1.15;margin-top:4px}.muted{color:#f0f0f0;font-size:19px;line-height:1.45;font-weight:600}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.danger{background:#6d1c1c;color:#fff}
+*{box-sizing:border-box}html,body{margin:0;width:100%;min-height:100%;background:#000;color:#fff;font-family:Arial,sans-serif}body{font-size:17px}.app{width:100%;max-width:760px;min-height:100dvh;margin:auto;background:#000}header{padding:28px 16px 20px;text-align:center;border-bottom:1px solid #8a6422}.brandline{display:flex;justify-content:center;align-items:center;gap:12px}.brandicon{font-size:42px;color:#e7a92d}.logo{color:#e7a92d;font-size:34px;font-weight:900}.sub{font-size:13px;margin-top:7px;text-transform:uppercase}main{padding:22px 16px 38px}.box{background:linear-gradient(145deg,#171717,#090909);border:1px solid #8a6422;border-radius:22px;padding:20px;margin-bottom:16px}h2{font-size:27px}input,select,textarea{width:100%;padding:15px;margin:6px 0 12px;background:#1b1b1b;color:#fff;border:1px solid #66502a;border-radius:14px;font-size:16px}button,.btn{background:#e7a92d;color:#090909;border:0;border-radius:14px;padding:14px 16px;font-weight:bold;text-decoration:none;display:inline-block}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card{overflow:hidden;background:#141414;border:1px solid #6e5223;border-radius:19px}.card img,.pic{width:100%;aspect-ratio:1;object-fit:cover}.pic{display:grid;place-items:center;font-size:62px;background:#222}.pad{padding:14px}.price{color:#e9bd50;font-weight:bold;font-size:21px}.muted{color:#d0d0d0;font-size:14px}.row{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}.danger{background:#6d1c1c;color:#fff}
 .voltar-bar{margin-bottom:18px}
-.voltar-btn{display:inline-flex;align-items:center;gap:10px;background:#171717;color:#e7a92d;border:1px solid #a87920;border-radius:16px;padding:16px 24px;font-size:22px;font-weight:900;text-decoration:none}
+.voltar-btn{display:inline-flex;align-items:center;gap:10px;background:#171717;color:#e7a92d;border:1px solid #a87920;border-radius:16px;padding:14px 20px;font-size:18px;font-weight:900;text-decoration:none}
 .foto-editor{margin:16px 0 20px;padding:16px;border:1px solid #8a6422;border-radius:18px;background:#0d0d0d;text-align:center}
 .foto-preview{width:100%;max-height:360px;object-fit:contain;border-radius:15px;background:#181818;display:none;margin-bottom:14px}
 .foto-preview.show{display:block}
 .foto-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .foto-actions label,.foto-actions button{width:100%;margin:0;text-align:center;cursor:pointer}
 .file-hidden{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
-.prod-thumb{width:124px;height:124px;object-fit:cover;border-radius:14px;border:1px solid #8a6422;background:#222}
+.prod-thumb{width:92px;height:92px;object-fit:cover;border-radius:14px;border:1px solid #8a6422;background:#222}
 .prod-info{display:flex;align-items:center;gap:14px;min-width:0}
-.prod-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.prod-actions .btn{font-size:18px;padding:15px 17px}.ver-fotos{width:100%;text-align:center;margin-top:10px}
+.prod-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ver-fotos{width:100%;text-align:center;margin-top:10px}
 .galeria-produto{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .galeria-produto .card img{width:100%;aspect-ratio:1;object-fit:cover;cursor:pointer}
 .foto-grande{position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.96);display:none;align-items:center;justify-content:center;padding:18px}
@@ -72,127 +70,25 @@ CSS="""
 .foto-nav{position:absolute;top:50%;transform:translateY(-50%);font-size:34px;padding:14px 18px}
 .foto-ant{left:8px}.foto-prox{right:8px}
 .foto-contador{position:absolute;bottom:20px;left:0;right:0;text-align:center;font-weight:bold}
-@media(max-width:480px){.foto-actions{grid-template-columns:1fr}.prod-thumb{width:112px;height:112px}.prod-info{align-items:flex-start}.prod-actions .btn{font-size:17px;padding:14px 15px}.price{font-size:29px}.muted{font-size:18px}h2{font-size:34px}}
+@media(max-width:480px){.foto-actions{grid-template-columns:1fr}.prod-thumb{width:82px;height:82px}}
 .menu-grid{display:flex;flex-direction:column;gap:14px}.menu-card{min-height:168px;padding:24px 22px;display:flex;align-items:center;gap:22px;color:#fff;text-decoration:none;background:linear-gradient(145deg,#171717,#090909);border:1px solid #a87920;border-radius:22px}.menu-icon{width:104px;flex:0 0 104px;text-align:center;color:#e7a92d;font-size:72px;line-height:1}.menu-copy{flex:1}.menu-title{font-size:34px;font-weight:900;margin-bottom:10px}.menu-desc{font-size:20px;color:#d0d0d0;line-height:1.25}.menu-arrow{font-size:58px;color:#e7a92d;font-weight:900}.menu-badge{background:#e7a92d;color:#090909;border-radius:50%;min-width:52px;height:52px;display:grid;place-items:center;font-size:22px;font-weight:900}.diferenciais{margin-top:32px;padding:30px 12px;border-top:2px solid #8a6422;text-align:center;color:#fff;font-size:31px;font-weight:900;line-height:1.55;letter-spacing:.2px}.diferenciais b{color:#e7a92d;font-size:36px}
 #splash{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .55s}#splash.hide{opacity:0;pointer-events:none}.splash-inner{text-align:center;padding:28px}.splash-mark{font-size:110px;line-height:1;color:#e7a92d;text-shadow:0 0 28px rgba(231,169,45,.4)}.splash-g3{font-size:80px;font-weight:900;color:#e7a92d;line-height:.9;margin-top:-18px}.splash-name{font-size:39px;font-weight:900;color:#e7a92d;margin-top:30px}.splash-sub{font-size:15px;line-height:1.5;margin-top:12px;text-transform:uppercase}.loader{width:42px;height:42px;border:4px solid #3b2c10;border-top-color:#e7a92d;border-radius:50%;margin:55px auto 14px;animation:spin .85s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:480px){.logo{font-size:28px}.brandicon{font-size:34px}.sub{font-size:11px}main{padding:18px 12px 30px}.menu-card{min-height:148px;padding:20px 16px;gap:16px}.menu-icon{width:88px;flex-basis:88px;font-size:62px}.menu-title{font-size:29px}.menu-desc{font-size:17px}.menu-arrow{font-size:48px}.splash-mark{font-size:90px}.splash-g3{font-size:66px}.splash-name{font-size:33px}}
-/* LEITURA GRANDE - BRECHÓ GETRES */
-.prod-info b{font-size:29px!important;line-height:1.2;font-weight:900!important}
-.prod-info .muted{font-size:19px!important;line-height:1.4}
-.prod-info .price{font-size:31px!important}
-.prod-actions .btn{font-size:18px!important;font-weight:900!important}
-@media(max-width:480px){
-  .prod-info b{font-size:27px!important}
-  .prod-info .muted{font-size:18px!important}
-  .prod-info .price{font-size:29px!important}
-  .prod-actions .btn{font-size:17px!important}
-}
-
 """
 
-class PGCursor:
-    def __init__(self, cur, lastrowid=None):
-        self.cur=cur
-        self.lastrowid=lastrowid
-    def fetchone(self): return self.cur.fetchone()
-    def fetchall(self): return self.cur.fetchall()
-    def __iter__(self): return iter(self.cur)
-
-_PG_POOL=None
-
-def _pool():
-    global _PG_POOL
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL do Supabase não está configurada no Render.")
-    if _PG_POOL is None:
-        _PG_POOL=ThreadedConnectionPool(
-            1,6,DATABASE_URL,
-            sslmode=os.environ.get("PGSSLMODE","require"),
-            connect_timeout=8
-        )
-    return _PG_POOL
-
-class PGConn:
-    def __init__(self, raw): self.raw=raw
-    def execute(self, sql, params=()):
-        q=sql.strip().replace("?", "%s")
-        cur=self.raw.cursor(cursor_factory=RealDictCursor)
-        wants_id=bool(re.match(r"^\s*INSERT\s+INTO\s+(produtos|vendas)\b", q, re.I)) and " RETURNING " not in q.upper()
-        if wants_id: q=q.rstrip().rstrip(';')+" RETURNING id"
-        cur.execute(q, params or ())
-        last=None
-        if wants_id:
-            row=cur.fetchone(); last=row["id"] if row else None
-        return PGCursor(cur,last)
-    def commit(self): self.raw.commit()
-    def rollback(self): self.raw.rollback()
-    def close(self):
-        try:
-            from psycopg2.extensions import TRANSACTION_STATUS_IDLE
-            if self.raw.get_transaction_status()!=TRANSACTION_STATUS_IDLE:
-                self.raw.rollback()
-            _pool().putconn(self.raw)
-        except Exception:
-            try:self.raw.close()
-            except Exception:pass
-
 def db():
-    p=_pool()
-    raw=p.getconn()
-    if not raw.closed:
-        return PGConn(raw)
-    try:p.putconn(raw,close=True)
-    except Exception:pass
-    raw=psycopg2.connect(DATABASE_URL,sslmode=os.environ.get("PGSSLMODE","require"),connect_timeout=8)
-    return PGConn(raw)
+    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
 
 def init():
     c=db()
-    c.execute("""CREATE TABLE IF NOT EXISTS produtos(
-        id BIGSERIAL PRIMARY KEY,
-        nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,
-        preco DOUBLE PRECISION,estoque INTEGER,imagem TEXT,descricao TEXT,
-        ativo INTEGER DEFAULT 1,offline_id TEXT,
-        imagem_dados BYTEA,imagem_mime TEXT
-    )""")
-    c.execute("CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT)")
-    c.execute("""CREATE TABLE IF NOT EXISTS fotos(
-        id BIGSERIAL PRIMARY KEY,produto_id BIGINT,arquivo TEXT,principal INTEGER DEFAULT 0,
-        dados BYTEA,mime TEXT
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS vendas(
-        id BIGSERIAL PRIMARY KEY,data TEXT,total DOUBLE PRECISION,pagamento TEXT,itens TEXT,
-        tipo_entrega TEXT DEFAULT 'retirada',taxa_entrega DOUBLE PRECISION DEFAULT 0,
-        status TEXT DEFAULT 'ATIVO',estoque_devolvido INTEGER DEFAULT 0,
-        offline_id TEXT,estoque_baixado INTEGER DEFAULT 0
-    )""")
-    # Migrações seguras: nunca apagam dados já existentes no Supabase.
-    for sql in [
-        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo INTEGER DEFAULT 1",
-        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS offline_id TEXT",
-        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_dados BYTEA",
-        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_mime TEXT",
-        "ALTER TABLE fotos ADD COLUMN IF NOT EXISTS dados BYTEA",
-        "ALTER TABLE fotos ADD COLUMN IF NOT EXISTS mime TEXT",
-        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'retirada'",
-        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DOUBLE PRECISION DEFAULT 0",
-        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'",
-        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS estoque_devolvido INTEGER DEFAULT 0",
-        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS offline_id TEXT",
-        "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS estoque_baixado INTEGER DEFAULT 0"
-    ]: c.execute(sql)
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
-    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"android","largura_papel":"58","impressora_nome":"","impressora_ip":"","impressora_porta":"9100","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":"","estatisticas_inicio":""}.items():
-        c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO NOTHING",(k,v))
-    c.execute("DELETE FROM fotos WHERE dados IS NULL OR octet_length(dados)=0")
-    c.execute("""UPDATE produtos p SET imagem=COALESCE((
-        SELECT f.arquivo FROM fotos f
-        WHERE f.produto_id=p.id AND f.dados IS NOT NULL AND octet_length(f.dados)>0
-        ORDER BY f.principal DESC,f.id DESC LIMIT 1
-    ),'') WHERE COALESCE(p.imagem,'')<>'' AND NOT EXISTS (
-        SELECT 1 FROM fotos fx WHERE fx.produto_id=p.id AND fx.arquivo=p.imagem
-        AND fx.dados IS NOT NULL AND octet_length(fx.dados)>0
-    )""")
+    c.executescript("""CREATE TABLE IF NOT EXISTS produtos(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,preco REAL,estoque INTEGER,imagem TEXT,descricao TEXT);
+CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
+CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
+    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
+        try: c.execute(sql)
+        except sqlite3.OperationalError: pass
+    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
+        c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
     c.commit(); c.close()
 
 def migrar_nome_getres():
@@ -204,140 +100,24 @@ def migrar_nome_getres():
     c.close()
 
 def conf():
-    # Cache por requisição: evita abrir várias conexões Supabase na mesma página.
-    if hasattr(g,"_getres_conf"):
-        return g._getres_conf
-    c=db()
-    d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}
-    c.close()
-    g._getres_conf=d
-    return d
-
-def reparar_fotos_produto(c, produto_id=None):
-    """Remove somente referências de fotos sem bytes e repara a foto principal."""
-    filtro=""
-    params=()
-    if produto_id is not None:
-        filtro=" AND produto_id=?"
-        params=(produto_id,)
-    c.execute("DELETE FROM fotos WHERE (dados IS NULL OR octet_length(dados)=0)"+filtro, params)
-    if produto_id is not None:
-        pids=[produto_id]
-    else:
-        pids=[r["id"] for r in c.execute("SELECT id FROM produtos").fetchall()]
-    for pid in pids:
-        principal=c.execute(
-            "SELECT id,arquivo FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 "
-            "ORDER BY principal DESC,id DESC LIMIT 1",(pid,)
-        ).fetchone()
-        if principal:
-            c.execute("UPDATE fotos SET principal=CASE WHEN id=? THEN 1 ELSE 0 END WHERE produto_id=?",
-                      (principal["id"],pid))
-            fd=c.execute("SELECT dados,mime FROM fotos WHERE id=?",(principal["id"],)).fetchone()
-            c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
-                      (principal["arquivo"],
-                       psycopg2.Binary(bytes(fd["dados"])) if fd and fd.get("dados") is not None else None,
-                       (fd.get("mime") if fd else None) or "image/jpeg",pid))
-        else:
-            c.execute("UPDATE produtos SET imagem='',imagem_dados=NULL,imagem_mime=NULL WHERE id=?",(pid,))
-
-def logo_data_uri():
-    """Retorna a logo persistida no Supabase em data URI."""
-    salvo=str(conf().get("logo","") or "").strip()
-    return salvo if salvo.startswith("data:image/") else ""
-
-def largura_impressao_mm(C=None):
-    C=C or conf()
-    try:
-        mm=int(str(C.get("largura_papel","58")).strip())
-    except Exception:
-        mm=58
-    return 76 if mm>=80 else 54
-
-def botoes_impressao(texto_compartilhar="BRECHÓ GETRES"):
-    """
-    Opções de impressão sem obrigar RawBT:
-    - Android padrão / qualquer serviço de impressão instalado
-    - Compartilhar para app de impressão
-    - RawBT opcional
-    - USB/OTG e Wi‑Fi por meio do serviço/plugin Android do fabricante
-    - ESC/POS genérico via compartilhamento
-    """
-    C=conf()
-    modo=str(C.get("impressora","android") or "android")
-    texto_json=json.dumps(texto_compartilhar,ensure_ascii=False)
-    return f"""
-    <div class='acoes-impressao'>
-      <button type='button' onclick='window.print()'>🖨️ ANDROID / IMPRESSÃO PADRÃO</button>
-      <button type='button' onclick='compartilharImpressao()'>📤 COMPARTILHAR PARA APP DE IMPRESSÃO</button>
-      <button type='button' onclick='copiarEscPos()'>📋 COPIAR TEXTO ESC/POS</button>
-      <details style='margin-top:8px;text-align:left'>
-        <summary style='cursor:pointer;font-weight:bold'>Outras opções</summary>
-        <p style='font-size:12px'>• RawBT: opcional, para quem já usa.</p>
-        <p style='font-size:12px'>• USB/OTG: selecione um serviço de impressão Android compatível com sua impressora.</p>
-        <p style='font-size:12px'>• Wi‑Fi/IP: use o serviço/plugin Android do fabricante ou um serviço ESC/POS instalado.</p>
-        <p style='font-size:12px'>• Bluetooth direto: disponível quando o sistema for empacotado como app Android com acesso nativo ao Bluetooth.</p>
-      </details>
-    </div>
-    <script>
-    const TEXTO_IMPRESSAO={texto_json};
-    async function compartilharImpressao(){{
-      if(navigator.share){{
-        try{{
-          await navigator.share({{title:'BRECHÓ GETRES',text:TEXTO_IMPRESSAO}});
-          return;
-        }}catch(e){{}}
-      }}
-      try{{
-        await navigator.clipboard.writeText(TEXTO_IMPRESSAO);
-        alert('Conteúdo copiado. Abra seu aplicativo de impressão e cole/envie.');
-      }}catch(e){{
-        alert('Use ANDROID / IMPRESSÃO PADRÃO para escolher um serviço de impressão instalado.');
-      }}
-    }}
-    async function copiarEscPos(){{
-      try{{
-        await navigator.clipboard.writeText(TEXTO_IMPRESSAO);
-        alert('Texto copiado para uso em app ESC/POS, RawBT ou plugin da impressora.');
-      }}catch(e){{
-        alert('Não foi possível copiar. Use o botão de impressão padrão.');
-      }}
-    }}
-    </script>
-    """
+    c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close(); return d
 
 @app.route("/logo-getres")
 def logo_getres():
-    uri=logo_data_uri()
-    if not uri: abort(404)
-    try:
-        cab,b64=uri.split(",",1); mime=cab.split(";",1)[0].split(":",1)[1]
-        return Response(base64.b64decode(b64),mimetype=mime,headers={"Cache-Control":"no-store, no-cache, must-revalidate"})
-    except Exception:
+    from flask import send_file, abort
+    C=conf()
+    salvo=str(C.get("logo","") or "").strip()
+    if not salvo:
         abort(404)
-
-@app.route("/foto-arquivo/<path:arquivo>")
-def foto_arquivo(arquivo):
-    c=db(); r=c.execute("SELECT dados,mime FROM fotos WHERE arquivo=? AND dados IS NOT NULL ORDER BY principal DESC,id DESC LIMIT 1",(arquivo,)).fetchone(); c.close()
-    if not r or r.get("dados") is None: abort(404)
-    return Response(bytes(r["dados"]),mimetype=r.get("mime") or "image/jpeg",headers={"Cache-Control":"public, max-age=31536000, immutable"})
-
-@app.route("/produto-foto/<int:pid>")
-def produto_foto(pid):
-    c=db()
-    r=c.execute("SELECT imagem_dados,imagem_mime FROM produtos WHERE id=?",(pid,)).fetchone()
-    if not r or r.get("imagem_dados") is None:
-        r=c.execute("""SELECT dados AS imagem_dados,mime AS imagem_mime FROM fotos
-                     WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0
-                     ORDER BY principal DESC,id DESC LIMIT 1""",(pid,)).fetchone()
-        if r and r.get("imagem_dados") is not None:
-            c.execute("UPDATE produtos SET imagem_dados=?,imagem_mime=? WHERE id=?",
-                      (psycopg2.Binary(bytes(r["imagem_dados"])),r.get("imagem_mime") or "image/jpeg",pid))
-            c.commit()
-    c.close()
-    if not r or r.get("imagem_dados") is None: abort(404)
-    return Response(bytes(r["imagem_dados"]),mimetype=r.get("imagem_mime") or "image/jpeg",
-                    headers={"Cache-Control":"public, max-age=86400"})
+    candidatos=[
+        salvo,
+        os.path.join("static", salvo),
+        os.path.join("static", os.path.basename(salvo)),
+    ]
+    for caminho in candidatos:
+        if os.path.isfile(caminho):
+            return send_file(os.path.abspath(caminho), max_age=0)
+    abort(404)
 
 def page(title,body,nav=True):
     C=conf()
@@ -345,288 +125,8 @@ def page(title,body,nav=True):
     if path != "/":
         destino="/?menu=1"
         body=f"<div class=voltar-bar><a class=voltar-btn href='{destino}'>← VOLTAR</a></div>"+body
-    logo_uri=logo_data_uri()
-    logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
-    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000">
-<meta name=application-name content="BRECHÓ GETRES">
-<meta name=apple-mobile-web-app-capable content="yes">
-<meta name=apple-mobile-web-app-status-bar-style content="black">
-<meta name=apple-mobile-web-app-title content="BRECHÓ GETRES">
-<link rel=manifest href="/manifest.json">
-<link rel=icon type="image/png" sizes="192x192" href="/pwa-icon-192.png">
-<link rel=apple-touch-icon href="/pwa-icon-192.png">
-<title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).catch(()=>{})}
-function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
-function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
-function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
-function setOfflineHistory(h){localStorage.setItem("getres_offline_history",JSON.stringify(h))}
-function getOfflineProducts(){try{return JSON.parse(localStorage.getItem("getres_offline_products")||"[]")}catch(e){return []}}
-function setOfflineProducts(q){localStorage.setItem("getres_offline_products",JSON.stringify(q))}
-function getOfflineActions(){try{return JSON.parse(localStorage.getItem("getres_offline_actions")||"[]")}catch(e){return []}}
-function setOfflineActions(q){localStorage.setItem("getres_offline_actions",JSON.stringify(q))}
-function queueOfflineAction(tipo,vid){
-  let q=getOfflineActions();
-  if(!q.some(x=>x.tipo===tipo&&Number(x.vid)===Number(vid))) q.push({tipo:tipo,vid:Number(vid),criado_em:new Date().toISOString()});
-  setOfflineActions(q);showNetStatus();
-}
-async function syncOfflineActions(){
-  if(!navigator.onLine)return; let q=getOfflineActions(); if(!q.length)return; const rest=[];
-  for(const a of q){try{
-    const rota=a.tipo==='confirmar'?('/confirmar-pagamento/'+a.vid):(a.tipo==='cancelar'?('/cancelar-pedido/'+a.vid):'');
-    if(!rota)continue;
-    const r=await fetch(rota,{method:'POST',redirect:'follow',cache:'no-store'});
-    if(!r.ok)rest.push(a);
-  }catch(e){rest.push(a)}}
-  setOfflineActions(rest);
-  await refreshOfflineCatalog();
-  showNetStatus();
-}
-document.addEventListener('submit',function(ev){
-  const f=ev.target;if(!f||navigator.onLine)return; const ac=f.getAttribute('action')||'';
-  let m=ac.match(/^\/confirmar-pagamento\/(\d+)$/);
-  if(m){ev.preventDefault();queueOfflineAction('confirmar',Number(m[1]));alert('Pagamento confirmado OFFLINE. A confirmação será enviada automaticamente quando a internet voltar.');location='/pedidos';return}
-  m=ac.match(/^\/cancelar-pedido\/(\d+)$/);
-  if(m){ev.preventDefault();queueOfflineAction('cancelar',Number(m[1]));alert('Cancelamento salvo OFFLINE. Será enviado automaticamente quando a internet voltar.');location='/pedidos'}
-},true);
-async function fileDataURL(f){return new Promise((ok,no)=>{const r=new FileReader();r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(f)})}
-async function syncOfflineProducts(){
-  if(!navigator.onLine)return; let q=getOfflineProducts(); if(!q.length)return; const rest=[];
-  for(const p of q){try{const r=await fetch('/sync-offline-product',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});const d=await r.json();if(!(r.ok&&d.ok)){p.last_error=d.erro||'Falha ao sincronizar produto';rest.push(p)}}catch(e){rest.push(p)}}
-  setOfflineProducts(rest); if(!rest.length)refreshOfflineCatalog();
-}
-function saveOfflineHistory(sale,status,serverId,erro){
-  let h=getOfflineHistory();
-  const i=h.findIndex(x=>x.offline_id===sale.offline_id);
-  const item={...sale,local_status:status||sale.local_status||"PENDENTE",server_id:serverId||sale.server_id||null,last_error:erro||sale.last_error||""};
-  if(i>=0)h[i]=item;else h.unshift(item);
-  setOfflineHistory(h.slice(0,100));
-}
-
-function abrirPedidosOfflineLocal(){
-  const q=getOfflineQueue();
-  const h=getOfflineHistory();
-  const acoes=getOfflineActions();
-  const pedidosServidor=(()=>{try{return JSON.parse(localStorage.getItem("getres_server_orders")||"[]")}catch(e){return []}})();
-
-  const esc=v=>String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
-  const idsPend=new Set(q.map(x=>x.offline_id));
-  const pendentes=q.map(p=>({...p,local_status:"PENDENTE"}));
-  const histPend=h.filter(p=>p.local_status==="PENDENTE" && !idsPend.has(p.offline_id));
-  const locais=[...pendentes,...histPend];
-
-  const overlay=document.createElement("div");
-  overlay.id="pedidosOfflineOverlay";
-  overlay.style.cssText="position:fixed;inset:0;z-index:1000000;background:#000;color:#fff;overflow:auto;font-family:Arial,sans-serif";
-  overlay.innerHTML=`<div style="background:#7a1f1f;padding:9px 14px;text-align:center;font-size:13px;font-weight:800">
-    📴 OFFLINE • ${q.length} pedido(s) aguardando sincronização
-  </div>
-  <div style="width:min(100%,560px);margin:auto;padding:24px 18px 80px">
-    <div style="text-align:center;color:#e7a92d;font-size:25px;font-weight:900;margin-bottom:26px">♧ BRECHÓ GETRES</div>
-    <button id="fecharPedidosOffline" style="border:1px solid #8a6422;background:#171717;color:#e7a92d;border-radius:12px;padding:13px 18px;font-weight:900">← VOLTAR</button>
-    <h1 style="font-size:28px;margin:28px 0 18px">Pedidos</h1>
-    <div id="listaPedidosOfflineLocal"></div>
-  </div>`;
-  document.body.appendChild(overlay);
-  document.getElementById("fecharPedidosOffline").onclick=()=>overlay.remove();
-
-  const lista=document.getElementById("listaPedidosOfflineLocal");
-  let html="";
-
-  for(const p of locais){
-    const total=Number(p.total || ((p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0)+Number(p.taxa_entrega||0)));
-    html+=`<div style="border:1px solid #a87920;border-radius:16px;padding:16px;margin:12px 0;background:#111">
-      <div style="display:flex;justify-content:space-between;gap:12px">
-        <div><b>📴 Pedido offline</b>
-          <div style="color:#bbb;font-size:14px;margin-top:5px">⏳ AGUARDANDO SINCRONIZAÇÃO</div>
-          <div style="color:#bbb;font-size:14px;margin-top:5px">Pagamento: ${esc(p.pagamento||"")}</div>
-        </div>
-        <b style="color:#e7a92d">R$ ${total.toFixed(2).replace(".",",")}</b>
-      </div>
-    </div>`;
-  }
-
-  for(const a of acoes){
-    html+=`<div style="border:1px solid #2f8f46;border-radius:16px;padding:16px;margin:12px 0;background:#111">
-      <b>${a.tipo==="confirmar"?"✅ Pagamento confirmado offline":"❌ Cancelamento salvo offline"} • Venda #${Number(a.vid)}</b>
-      <div style="color:#bbb;font-size:14px;margin-top:5px">Será sincronizado quando a internet voltar.</div>
-    </div>`;
-  }
-
-  for(const v of pedidosServidor){
-    const st=v.status||"AGUARDANDO_PAGAMENTO";
-    const rotulo=st==="PAGO"?"✅ PAGO":st==="CANCELADO"?"❌ CANCELADO":"⏳ AGUARDANDO PAGAMENTO";
-    html+=`<button data-venda-local="${Number(v.id)}" style="width:100%;color:#fff;text-align:left;border:1px solid #8a6422;border-radius:16px;padding:16px;margin:12px 0;background:#111">
-      <div style="display:flex;justify-content:space-between;gap:12px">
-        <div><b>Venda #${Number(v.id)}</b><div style="color:#bbb;font-size:14px;margin-top:5px">${rotulo}</div></div>
-        <span>R$ ${Number(v.total||0).toFixed(2)}</span>
-      </div>
-    </button>`;
-  }
-
-  lista.innerHTML=html || `<div style="border:1px solid #8a6422;border-radius:16px;padding:16px;background:#111">Nenhum pedido salvo neste aparelho.</div>`;
-  lista.querySelectorAll("[data-venda-local]").forEach(btn=>{
-    btn.onclick=()=>abrirVendaOfflineLocal(Number(btn.getAttribute("data-venda-local")));
-  });
-}
-
-function abrirVendaOfflineLocal(vid){
-  const pedidosServidor=(()=>{try{return JSON.parse(localStorage.getItem("getres_server_orders")||"[]")}catch(e){return []}})();
-  const v=pedidosServidor.find(x=>Number(x.id)===Number(vid));
-  if(!v){alert("Os dados desta venda não estão salvos neste aparelho.");return}
-
-  const overlay=document.getElementById("pedidosOfflineOverlay");
-  if(!overlay)return;
-  const st=v.status||"AGUARDANDO_PAGAMENTO";
-  const rotulo=st==="PAGO"?"✅ PAGO":st==="CANCELADO"?"❌ CANCELADO":"⏳ AGUARDANDO PAGAMENTO";
-  const pode=st!=="PAGO"&&st!=="CANCELADO";
-  const recebe=v.tipo_entrega==="entrega"?"Entrega":"Retirada no local";
-
-  overlay.innerHTML=`<div style="background:#7a1f1f;padding:9px 14px;text-align:center;font-size:13px;font-weight:800">
-    📴 OFFLINE
-  </div>
-  <div style="width:min(100%,560px);margin:auto;padding:24px 18px 80px">
-    <div style="text-align:center;color:#e7a92d;font-size:25px;font-weight:900;margin-bottom:26px">♧ BRECHÓ GETRES</div>
-    <button id="voltarListaOffline" style="border:1px solid #8a6422;background:#171717;color:#e7a92d;border-radius:12px;padding:13px 18px;font-weight:900">← PEDIDOS</button>
-    <h1 style="font-size:28px;margin:28px 0 18px">Venda #${vid}</h1>
-
-    <div style="border:1px solid #8a6422;border-radius:16px;padding:18px;background:#111">
-      <div style="font-size:24px;font-weight:900;color:#e7a92d">R$ ${Number(v.total||0).toFixed(2).replace(".",",")}</div>
-      <p><b>Status: ${rotulo}</b></p>
-      <p>Pagamento: ${String(v.pagamento||"")}</p>
-      <p>Recebimento: ${recebe}</p>
-    </div>
-
-    ${v.pagamento==="PIX"&&pode?`<div style="border:1px solid #8a6422;border-radius:16px;padding:18px;background:#111;text-align:center;margin-top:14px">
-      <h3>💠 PIX QR CODE</h3>
-      <p>Valor: <b>R$ ${Number(v.total||0).toFixed(2).replace(".",",")}</b></p>
-      <p style="color:#bbb;font-size:14px">O QR Code completo precisa de internet, mas a confirmação pode ser registrada offline.</p>
-    </div>`:""}
-
-    ${pode?`
-      <button id="confirmarVendaOfflineLocal" style="width:100%;border:0;border-radius:11px;padding:15px;background:#efad29;color:#111;font-weight:900;margin-top:14px">✅ CONFIRMAR PAGAMENTO OFFLINE</button>
-      <button id="cancelarVendaOfflineLocal" style="width:100%;border:0;border-radius:11px;padding:15px;background:#8b2025;color:#fff;font-weight:900;margin-top:12px">❌ CANCELAR PEDIDO OFFLINE</button>
-    `:st==="PAGO"?`<div style="border:1px solid #2f8f46;border-radius:16px;padding:18px;background:#111;text-align:center;margin-top:14px"><b>✅ PAGAMENTO CONFIRMADO</b></div>`:
-      `<div style="border:1px solid #8b2727;border-radius:16px;padding:18px;background:#111;text-align:center;margin-top:14px"><b>❌ PEDIDO CANCELADO</b></div>`}
-  </div>`;
-
-  document.getElementById("voltarListaOffline").onclick=()=>{
-    overlay.remove();
-    abrirPedidosOfflineLocal();
-  };
-
-  const confirmar=document.getElementById("confirmarVendaOfflineLocal");
-  if(confirmar)confirmar.onclick=()=>{
-    if(!confirm("Confirmar o pagamento desta venda?"))return;
-    let a=getOfflineActions().filter(x=>Number(x.vid)!==Number(vid));
-    a.push({tipo:"confirmar",vid:Number(vid),criado_em:new Date().toISOString()});
-    setOfflineActions(a);
-    const atual=pedidosServidor.map(x=>Number(x.id)===Number(vid)?({...x,status:"PAGO"}):x);
-    localStorage.setItem("getres_server_orders",JSON.stringify(atual));
-    alert("Pagamento confirmado OFFLINE. Será sincronizado quando a internet voltar.");
-    overlay.remove();abrirPedidosOfflineLocal();
-  };
-
-  const cancelar=document.getElementById("cancelarVendaOfflineLocal");
-  if(cancelar)cancelar.onclick=()=>{
-    if(!confirm("Cancelar esta venda?"))return;
-    let a=getOfflineActions().filter(x=>Number(x.vid)!==Number(vid));
-    a.push({tipo:"cancelar",vid:Number(vid),criado_em:new Date().toISOString()});
-    setOfflineActions(a);
-    const atual=pedidosServidor.map(x=>Number(x.id)===Number(vid)?({...x,status:"CANCELADO"}):x);
-    localStorage.setItem("getres_server_orders",JSON.stringify(atual));
-    alert("Cancelamento salvo OFFLINE. Será sincronizado quando a internet voltar.");
-    overlay.remove();abrirPedidosOfflineLocal();
-  };
-}
-
-document.addEventListener("click",function(ev){
-  if(navigator.onLine)return;
-  const a=ev.target.closest && ev.target.closest("a[href]");
-  if(!a)return;
-  try{
-    const u=new URL(a.href,location.origin);
-    if(u.origin===location.origin && u.pathname==="/pedidos"){
-      ev.preventDefault();
-      abrirPedidosOfflineLocal();
-    }
-  }catch(e){}
-},true);
-
-function showNetStatus(){
-  const el=document.getElementById("netStatus"); if(!el)return;
-  if(navigator.onLine){el.style.display="none";return}
-  const n=getOfflineQueue().length;
-  const a=getOfflineActions().length;
-  el.style.display="block";
-  if(n>0 && a>0) el.textContent="📴 OFFLINE • "+n+" pedido(s) + "+a+" ação(ões) aguardando sincronização";
-  else if(n>0) el.textContent="📴 OFFLINE • "+n+" pedido(s) aguardando sincronização";
-  else if(a>0) el.textContent="📴 OFFLINE • "+a+" ação(ões) aguardando sincronização";
-  else el.textContent="📴 OFFLINE • tudo sincronizado";
-}
-async function refreshOfflineCatalog(){
-  if(!navigator.onLine)return;
-  try{
-    const r=await fetch("/offline/catalogo",{cache:"no-store"});
-    if(r.ok)localStorage.setItem("getres_catalogo",JSON.stringify(await r.json()));
-  }catch(e){}
-}
-async function syncOfflineSales(){
-  if(!navigator.onLine)return;
-  let q=getOfflineQueue(); if(!q.length){showNetStatus();return}
-  const rest=[];
-  for(const sale of q){
-    try{
-      const r=await fetch("/sync-offline-sale",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(sale)});
-      const d=await r.json();
-      if(r.ok && d.ok){
-        saveOfflineHistory(sale,"SINCRONIZADO",d.id||null,"");
-      }else{
-        sale.last_error=d.erro||"Falha ao sincronizar";rest.push(sale);
-        saveOfflineHistory(sale,"PENDENTE",null,sale.last_error);
-      }
-    }catch(e){
-      rest.push(sale);
-      saveOfflineHistory(sale,"PENDENTE",null,sale.last_error||"");
-    }
-  }
-  setOfflineQueue(rest);showNetStatus();
-  if(typeof renderPedidosOffline==="function")renderPedidosOffline();
-  await refreshOfflineCatalog();
-}
-async function syncTudoOffline(){
-  if(!navigator.onLine)return;
-  showNetStatus();
-  await syncOfflineProducts();
-  await syncOfflineSales();
-  await syncOfflineActions();
-  await refreshOfflineCatalog();
-  showNetStatus();
-
-  // Se o usuário está vendo Produtos/Destaques, força UMA atualização após a
-  // sincronização para mostrar o estoque real do Supabase, e não a página restaurada
-  // pelo navegador/cache de quando estava offline.
-  if(location.pathname==='/produtos' || location.pathname==='/destaques'){
-    const marca='getres_sync_reload_'+location.pathname;
-    if(sessionStorage.getItem(marca)!=='1'){
-      sessionStorage.setItem(marca,'1');
-      location.reload();
-      return;
-    }
-  }
-}
-window.addEventListener("online",()=>{sessionStorage.removeItem('getres_sync_reload_/produtos');sessionStorage.removeItem('getres_sync_reload_/destaques');syncTudoOffline()});
-window.addEventListener("offline",showNetStatus);
-document.addEventListener("DOMContentLoaded",()=>{
-  showNetStatus();
-  if(!navigator.onLine)return;
-  const agora=Date.now(), ultimo=Number(localStorage.getItem("getres_last_sync")||0);
-  if(agora-ultimo>15000){
-    localStorage.setItem("getres_last_sync",String(agora));
-    syncTudoOffline();
-  }
-});
-</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
+    logo_header=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo BRECHÓ GETRES' style='width:42px;height:42px;object-fit:contain;display:block'>" if C.get("logo") else "<span class=brandicon>♧</span>")
+    return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{})}</script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
 def home():
@@ -664,95 +164,24 @@ try{{document.getElementById('homeBadge').textContent=JSON.parse(localStorage.g3
 
 @app.route("/destaques")
 def destaques():
-    c=db(); rows=c.execute("""SELECT p.*,
-        (p.imagem_dados IS NOT NULL OR EXISTS(
-          SELECT 1 FROM fotos f WHERE f.produto_id=p.id
-          AND f.dados IS NOT NULL AND octet_length(f.dados)>0
-        )) AS tem_foto
-        FROM produtos p WHERE COALESCE(p.ativo,1)=1 ORDER BY p.id DESC""").fetchall(); c.close()
+    c=db(); rows=c.execute("SELECT * FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall(); c.close()
     cards=""
     for r in rows:
-        tem_foto=bool(r.get("tem_foto"))
-        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/produto-foto/"+str(r["id"])+"?v="+str(int(datetime.now().timestamp()))+"' alt='Ver fotos'></a>") if tem_foto else "<div class=pic>👕</div>"
-        cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button {'disabled style="opacity:.45"' if int(r['estoque'] or 0)<=0 else ''} onclick="if({int(r['estoque'] or 0)}<=0){{alert('Produto sem estoque.');return}}let c=JSON.parse(localStorage.g3cart||'[]');let qtd=c.filter(i=>Number(i)==={r['id']}).length;if(qtd>={int(r['estoque'] or 0)}){{alert('Estoque máximo deste produto já está no carrinho.');return}}c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">{'+ Carrinho' if int(r['estoque'] or 0)>0 else 'SEM ESTOQUE'}</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
-    if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
-    offline_js=r"""
-<script>
-(function(){
-  const grid=document.querySelector('.grid');
-  if(!grid)return;
-
-  function getCatalogo(){
-    try{return JSON.parse(localStorage.getItem('getres_catalogo')||'[]')}catch(e){return []}
-  }
-  function getPendentes(){
-    try{return JSON.parse(localStorage.getItem('getres_offline_products')||'[]')}catch(e){return []}
-  }
-  function esc(v){
-    return String(v==null?'':v).replace(/[&<>"']/g,function(c){
-      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-    });
-  }
-  function fotoProduto(p){
-    if(p.imagens && p.imagens.length && p.imagens[0]) return p.imagens[0];
-    if(p.imagem){
-      if(String(p.imagem).startsWith('data:') || String(p.imagem).startsWith('/')) return p.imagem;
-      return '/foto-arquivo/'+p.imagem;
-    }
-    return '';
-  }
-  function card(p,pendente){
-    const foto=fotoProduto(p);
-    const preco=Number(p.preco||0).toFixed(2);
-    const img=foto ? `<img src="${esc(foto)}" alt="Produto">` : `<div class="pic">👕</div>`;
-    const id=Number(p.id||0);
-    const est=Number(p.estoque||0); const carrinho=id ? (est>0?`<button onclick="let c=JSON.parse(localStorage.g3cart||'[]');let qtd=c.filter(i=>Number(i)===${id}).length;if(qtd>=${est}){alert('Estoque máximo deste produto já está no carrinho.');return}c.push(${id});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button>`:`<button disabled style="opacity:.45">SEM ESTOQUE</button>`) : '';
-    return `<div class="card">${img}<div class="pad"><b>${esc(p.nome||'Blusa')}</b>
-      <div class="muted">${esc(p.tamanho||'')} • ${esc(p.estado||'')} • estoque ${esc(p.estoque||0)}</div>
-      <div class="price">R$ ${preco}</div>${pendente?'<div class="muted">⏳ Aguardando sincronização</div>':carrinho}</div></div>`;
-  }
-
-  const servidorTemProdutos = grid.querySelector('.card');
-  const vazio=document.getElementById('destaquesVazio');
-  const pendentes=getPendentes();
-
-  if(servidorTemProdutos){
-    if(pendentes.length) grid.insertAdjacentHTML('beforeend',pendentes.map(p=>card(p,true)).join(''));
-    return;
-  }
-
-  const catalogo=getCatalogo();
-  const todos=[...pendentes];
-  const vistos=new Set(pendentes.map(p=>String(p.offline_id||p.id||'')));
-  catalogo.forEach(p=>{
-    const k=String(p.offline_id||p.id||'');
-    if(!vistos.has(k)) todos.push(p);
-  });
-
-  if(todos.length){
-    if(vazio)vazio.remove();
-    grid.innerHTML=todos.map(p=>card(p,!!p.offline_id && !p.id)).join('');
-  }
-})();
-</script>"""
-    return page("Início","<h2>Destaques</h2><div class=grid>"+cards+"</div><br><a class=btn href='/'>← MENU PRINCIPAL</a>"+offline_js)
+        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/static/produtos/"+r["imagem"]+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
+        cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
+    if not cards: cards="<div class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
+    return page("Início","<h2>Destaques</h2><div class=grid>"+cards+"</div><br><a class=btn href='/'>← MENU PRINCIPAL</a>")
 
 @app.route("/produtos")
 def produtos():
-    c=db(); rows=c.execute("""SELECT p.*,
-        (p.imagem_dados IS NOT NULL OR EXISTS(
-          SELECT 1 FROM fotos f WHERE f.produto_id=p.id
-          AND f.dados IS NOT NULL AND octet_length(f.dados)>0
-        )) AS tem_foto
-        FROM produtos p ORDER BY p.id DESC""").fetchall(); c.close()
+    c=db(); rows=c.execute("SELECT * FROM produtos ORDER BY id DESC").fetchall(); c.close()
     x="<div class=row><h2>Produtos</h2><a class=btn href='/novo'>＋ ADICIONAR</a></div>"
     if not rows:
         x+="<div class=box>Nenhuma blusa cadastrada.</div>"
     for r in rows:
-        tem_foto=bool(r.get("tem_foto"))
-        foto=f"<img class=prod-thumb src='/produto-foto/{r['id']}'>" if tem_foto else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
+        foto=f"<img class=prod-thumb src='/static/produtos/{r['imagem']}'>" if r["imagem"] else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
         x+=f"""<div class=box>
-        <div class=prod-info>{foto}<div><b style='font-size:29px;line-height:1.2;font-weight:900'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
+        <div class=prod-info>{foto}<div><b style='font-size:21px'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
         <div class=prod-actions>
         <a class=btn href='/editar/{r['id']}'>✏️ DIGITAR / EDITAR</a>
         <a class=btn href='/fotos/{r['id']}'>📷 ADICIONAR FOTOS</a>
@@ -761,14 +190,13 @@ def produtos():
         {("<a class='btn danger' href='/desativar/"+str(r['id'])+"'>⛔ DESATIVAR</a>" if int(r["ativo"] if r["ativo"] is not None else 1)==1 else "<a class='btn' href='/reativar/"+str(r['id'])+"'>♻️ REATIVAR</a>")}
         <a class='btn danger' href='/excluir/{r['id']}' onclick="return confirm('Excluir definitivamente? Se já houve venda, será apenas desativado.')">🗑️ EXCLUIR</a>
         </div></div>"""
-    x+="<div id=produtosOffline></div><a class=btn href='/'>← MENU PRINCIPAL</a>"
-    x+="""<script>(function(){const el=document.getElementById('produtosOffline'),q=getOfflineProducts();if(!el||!q.length)return;el.innerHTML='<h3>📴 Produtos aguardando sincronização</h3>'+q.map(p=>`<div class=box><b>${p.nome}</b><div class=muted>${p.time_nome||''} • ${p.tamanho||''}</div><div class=price>R$ ${Number(p.preco||0).toFixed(2)}</div><div class=muted>⏳ Salvo neste celular</div></div>`).join('')})();</script>"""
+    x+="<a class=btn href='/'>← MENU PRINCIPAL</a>"
     return page("Produtos",x)
 
 def form_prod(r=None):
     def v(k): return str(r[k] or "") if r else ""
     atual=v("imagem")
-    atual_src=f"/foto-arquivo/{atual}" if atual else ""
+    atual_src=f"/static/produtos/{atual}" if atual else ""
     show=" show" if atual else ""
     return f"""<h2>{'✏️ Editar blusa' if r else '👕 Cadastrar blusa'}</h2>
 <form method=post enctype=multipart/form-data class=box id=produtoForm>
@@ -800,50 +228,40 @@ def form_prod(r=None):
 const fi=document.getElementById('imagemInput'), pv=document.getElementById('preview'), sf=document.getElementById('semFoto'), rm=document.getElementById('removerImagem');
 fi.addEventListener('change',()=>{{let fs=[...(fi.files||[])];if(fs.length>6){{alert('Escolha no máximo 6 fotos.');fi.value='';return}};let mp=document.getElementById('multiPreview');mp.innerHTML='';fs.forEach(f=>{{let im=document.createElement('img');im.src=URL.createObjectURL(f);im.style='width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px';mp.appendChild(im)}});if(fs[0]){{pv.src=URL.createObjectURL(fs[0]);pv.classList.add('show');sf.style.display='none';rm.value='0'}}}});
 function excluirPreview(){{fi.value='';pv.removeAttribute('src');pv.classList.remove('show');sf.style.display='block';rm.value='1'}}
-document.getElementById('produtoForm').addEventListener('submit',async function(ev){{
- if(navigator.onLine)return;
- ev.preventDefault();
- const fd=new FormData(this), fotos=[...(fi.files||[])].slice(0,6), imagens=[];
- for(const f of fotos) imagens.push(await fileDataURL(f));
- const p={{offline_id:'prod-'+Date.now()+'-'+Math.random().toString(16).slice(2),produto_id:{str(r['id']) if r else 'null'},operacao:{'"editar"' if r else '"novo"'},nome:fd.get('nome')||'',time_nome:fd.get('time_nome')||'',categoria:fd.get('categoria')||'',tamanho:fd.get('tamanho')||'',estado:fd.get('estado')||'',preco:Number(String(fd.get('preco')||'0').replace(',','.')),estoque:Number(fd.get('estoque')||0),descricao:fd.get('descricao')||'',imagens:imagens,criado_em:new Date().toISOString()}};
- let q=getOfflineProducts();q.unshift(p);setOfflineProducts(q);alert('Produto e fotos salvos OFFLINE. Serão sincronizados quando a internet voltar.');location='/produtos';
-}});
 </script>"""
 
 @app.route("/novo",methods=["GET","POST"])
 @app.route("/editar/<int:pid>",methods=["GET","POST"])
 def produto_form(pid=None):
-    c=db()
-    if pid:
-        reparar_fotos_produto(c,pid); c.commit()
-    r=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone() if pid else None
+    c=db(); r=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone() if pid else None
     if request.method=="POST":
-        img=r["imagem"] if r else ""; old_img=img
+        img=r["imagem"] if r else ""
+        old_img=img
         if request.form.get("remover_imagem")=="1":
             img=""
-            if old_img: c.execute("DELETE FROM fotos WHERE produto_id=? AND arquivo=?",(pid,old_img))
+            if old_img:
+                try: os.remove("static/produtos/"+old_img)
+                except OSError: pass
         novos=[f for f in request.files.getlist("imagem")[:6] if f and f.filename]
-        novos_dados=[]
+        arquivos_novos=[]
         for f in novos:
             ext=os.path.splitext(f.filename)[1].lower() or ".jpg"
-            arq=secrets.token_hex(10)+ext; dados=f.read(); mime=f.mimetype or "image/jpeg"
-            if dados: novos_dados.append((arq,dados,mime))
-        if novos_dados: img=novos_dados[0][0]
+            arq=secrets.token_hex(8)+ext
+            f.save("static/produtos/"+arq)
+            arquivos_novos.append(arq)
+        if arquivos_novos: img=arquivos_novos[0]
         vals=(request.form["nome"],request.form.get("time_nome",""),request.form.get("categoria",""),request.form.get("tamanho",""),request.form.get("estado",""),float(request.form.get("preco","0").replace(",",".")),int(request.form.get("estoque","0")),img,request.form.get("descricao",""))
         if pid:
-            c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,imagem=?,descricao=? WHERE id=?",vals+(pid,)); produto_id=pid
+            c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,imagem=?,descricao=? WHERE id=?",vals+(pid,))
+            produto_id=pid
         else:
-            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals); produto_id=cur.lastrowid
-        if novos_dados:
-            reparar_fotos_produto(c,produto_id)
-            existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0",(produto_id,)).fetchone()["n"] or 0)
-            vagas=max(0,6-existentes)
-            if vagas:
-                c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
-                for i,(arq,dados,mime) in enumerate(novos_dados[:vagas]):
-                    c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(produto_id,arq,1 if i==0 else 0,psycopg2.Binary(dados),mime))
-                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
-                          (novos_dados[0][0],psycopg2.Binary(novos_dados[0][1]),novos_dados[0][2],produto_id))
+            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals)
+            produto_id=cur.lastrowid
+        if arquivos_novos:
+            c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
+            existentes=c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(produto_id,)).fetchone()["n"]
+            for i,arq in enumerate(arquivos_novos[:max(0,6-existentes)]):
+                c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(produto_id,arq,1 if i==0 else 0))
         c.commit();c.close();return redirect("/produtos")
     out=page("Produto",form_prod(r));c.close();return out
 
@@ -864,19 +282,27 @@ def excluir(pid):
         except Exception: pass
     if usado:
         c.execute("UPDATE produtos SET ativo=0 WHERE id=?",(pid,)); c.commit(); c.close(); return redirect("/produtos")
+    p=c.execute("SELECT imagem FROM produtos WHERE id=?",(pid,)).fetchone()
+    fotos_rows=c.execute("SELECT arquivo FROM fotos WHERE produto_id=?",(pid,)).fetchall()
+    arquivos=set()
+    if p and p["imagem"]: arquivos.add(p["imagem"])
+    for f in fotos_rows:
+        if f["arquivo"]: arquivos.add(f["arquivo"])
+    for arq in arquivos:
+        try: os.remove("static/produtos/"+arq)
+        except OSError: pass
     c.execute("DELETE FROM fotos WHERE produto_id=?",(pid,)); c.execute("DELETE FROM produtos WHERE id=?",(pid,))
     c.commit(); c.close(); return redirect("/produtos")
 
 @app.route("/galeria/<int:pid>")
 def galeria(pid):
     c=db()
-    reparar_fotos_produto(c,pid); c.commit()
     p=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone()
     if not p:
         c.close()
         return "Produto não encontrado",404
 
-    rows=c.execute("SELECT arquivo FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 ORDER BY principal DESC,id DESC",(pid,)).fetchall()
+    rows=c.execute("SELECT arquivo FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall()
     arquivos=[]
     if p["imagem"]:
         arquivos.append(p["imagem"])
@@ -890,10 +316,10 @@ def galeria(pid):
         return page("Fotos",f"<h2>📸 {p['nome']}</h2><div class=box>Nenhuma foto cadastrada para esta blusa.</div>")
 
     thumbs="".join(
-        f"<div class=card><img src='/foto-arquivo/{arq}' onclick='abrirFoto({i})' alt='Foto {i+1}'></div>"
+        f"<div class=card><img src='/static/produtos/{arq}' onclick='abrirFoto({i})' alt='Foto {i+1}'></div>"
         for i,arq in enumerate(arquivos)
     )
-    js_arquivos=json.dumps(["/foto-arquivo/"+a for a in arquivos],ensure_ascii=False)
+    js_arquivos=json.dumps(["/static/produtos/"+a for a in arquivos],ensure_ascii=False)
     body=f"""<h2>📸 {p['nome']}</h2>
     <div class=box><b>{len(arquivos)} {'foto' if len(arquivos)==1 else 'fotos'}</b>
     <div class=muted>Toque em uma imagem para visualizar em tamanho grande.</div></div>
@@ -919,198 +345,90 @@ def galeria(pid):
     return page("Galeria",body)
 
 
-@app.route("/api/upload-fotos/<int:pid>",methods=["POST"])
-def api_upload_fotos(pid):
-    c=db()
-    try:
-        p=c.execute("SELECT id FROM produtos WHERE id=?",(pid,)).fetchone()
-        if not p:
-            c.close()
-            return {"ok":False,"erro":"Produto não encontrado."},404
-
-        existentes=int(c.execute(
-            "SELECT COUNT(*) n FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0",
-            (pid,)
-        ).fetchone()["n"] or 0)
-        vagas=max(0,6-existentes)
-        if vagas<=0:
-            c.close()
-            return {"ok":False,"erro":"Este produto já possui 6 fotos."},400
-
-        recebidas=[f for f in request.files.getlist("fotos") if f and f.filename]
-        if not recebidas:
-            c.close()
-            return {"ok":False,"erro":"Nenhuma imagem chegou ao servidor."},400
-
-        salvas=0
-        for f in recebidas[:vagas]:
-            dados=f.read()
-            if not dados:
-                continue
-            mime=(f.mimetype or "image/jpeg").lower()
-            if mime not in ("image/jpeg","image/png","image/webp"):
-                mime="image/jpeg"
-            ext=".png" if mime=="image/png" else ".webp" if mime=="image/webp" else ".jpg"
-            arq=secrets.token_hex(12)+ext
-            principal=1 if existentes+salvas==0 else 0
-
-            c.execute(
-                "INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",
-                (pid,arq,principal,psycopg2.Binary(dados),mime)
-            )
-            if principal:
-                c.execute(
-                    "UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
-                    (arq,psycopg2.Binary(dados),mime,pid)
-                )
-            salvas+=1
-
-        if salvas==0:
-            c.rollback(); c.close()
-            return {"ok":False,"erro":"A imagem foi recebida, mas não pôde ser gravada."},400
-
-        c.commit(); c.close()
-        return {"ok":True,"salvas":salvas}
-    except Exception as e:
-        try:c.rollback()
-        except Exception:pass
-        try:c.close()
-        except Exception:pass
-        return {"ok":False,"erro":str(e)},500
-
-
 @app.route("/fotos/<int:pid>",methods=["GET","POST"])
 def fotos(pid):
     c=db(); p=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone()
     if not p: c.close(); return "Produto não encontrado",404
-    reparar_fotos_produto(c,pid); c.commit()
     if request.method=="POST":
         fs=[f for f in request.files.getlist("fotos") if f and f.filename]
-        existentes=int(c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0",(pid,)).fetchone()["n"] or 0); vagas=max(0,6-existentes)
+        existentes=c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(pid,)).fetchone()["n"]
+        vagas=max(0,6-existentes)
         for f in fs[:vagas]:
-            ext=os.path.splitext(f.filename)[1].lower() or ".jpg"; arq=secrets.token_hex(10)+ext; dados=f.read(); mime=f.mimetype or "image/jpeg"
-            if not dados: continue
-            tem=c.execute("SELECT 1 FROM fotos WHERE produto_id=?",(pid,)).fetchone(); principal=0 if tem else 1
-            c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,arq,principal,psycopg2.Binary(dados),mime))
-            if principal:
-                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
-                          (arq,psycopg2.Binary(dados),mime,pid))
+            ext=os.path.splitext(f.filename)[1].lower() or ".jpg"
+            arq=secrets.token_hex(10)+ext
+            f.save("static/produtos/"+arq)
+            tem=c.execute("SELECT 1 FROM fotos WHERE produto_id=?",(pid,)).fetchone()
+            c.execute("INSERT INTO fotos(produto_id,arquivo,principal) VALUES(?,?,?)",(pid,arq,0 if tem else 1))
         c.commit(); c.close(); return redirect("/fotos/"+str(pid))
-    rows=c.execute("SELECT id,produto_id,arquivo,principal FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
+    rows=c.execute("SELECT * FROM fotos WHERE produto_id=? ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
     cards=""
     for f in rows:
-        cards+=f"""<div class=card><img src='/foto-arquivo/{f["arquivo"]}'><div class=pad>
+        cards+=f"""<div class=card><img src='/static/produtos/{f["arquivo"]}'><div class=pad>
         {'<b>⭐ Principal</b><br>' if f["principal"] else ''}
         <a class=btn href='/foto-principal/{pid}/{f["id"]}'>⭐ Principal</a>
         <a class='btn danger' href='/foto-excluir/{pid}/{f["id"]}'>🗑 Excluir</a></div></div>"""
     body=f"""<h2>📸 Fotos • G3-{pid:05d}</h2>
-    <div class=box>
-      <label>➕ Adicionar fotos</label>
-      <input class=file-hidden id=cameraFotos type=file accept='image/*' capture='environment'>
-      <input class=file-hidden id=galeriaFotos type=file accept='image/*' multiple>
-      <div class=foto-actions>
-        <label class=btn for=cameraFotos>📷 TIRAR FOTO</label>
-        <label class=btn for=galeriaFotos>🖼️ ESCOLHER DA GALERIA</label>
-      </div>
-      <div id=selecionadas class=muted style='padding:16px 4px;text-align:center'>Nenhuma nova foto selecionada.</div>
-      <div id=uploadStatus class=muted style='padding:8px 4px;text-align:center'></div>
-      <p class=muted>Até 6 fotos. O app reduz o tamanho antes do envio para acelerar o salvamento.</p>
-      <button id=salvarFotos type=button style='width:100%' disabled>💾 SALVAR FOTOS</button>
+    <form method=post enctype=multipart/form-data class=box id=fotosForm>
+    <label>➕ Adicionar fotos</label>
+
+    <input class=file-hidden id=cameraFotos type=file name=fotos accept='image/*' capture='environment'>
+    <input class=file-hidden id=galeriaFotos type=file name=fotos accept='image/*' multiple>
+
+    <div class=foto-actions>
+      <label class=btn for=cameraFotos>📷 TIRAR FOTO</label>
+      <label class=btn for=galeriaFotos>🖼️ ESCOLHER DA GALERIA</label>
     </div>
+
+    <div id=selecionadas class=muted style='padding:16px 4px;text-align:center'>
+      Nenhuma nova foto selecionada.
+    </div>
+
+    <p class=muted>Você pode manter até 6 fotos por produto. Tire uma foto ou selecione várias imagens da galeria; as fotos já salvas não serão apagadas.</p>
+    <button id=adicionarFotos type=submit style='width:100%' disabled>➕ ADICIONAR FOTOS</button>
+    </form>
+
     <div class=grid>{cards or '<div class=box>Nenhuma foto adicional.</div>'}</div>
 
     <script>
     const cam=document.getElementById('cameraFotos');
     const gal=document.getElementById('galeriaFotos');
     const info=document.getElementById('selecionadas');
-    const statusEl=document.getElementById('uploadStatus');
-    const salvar=document.getElementById('salvarFotos');
-    let escolhidas=[];
+    const botao=document.getElementById('adicionarFotos');
 
-    function selecionar(input){{
-      escolhidas=[...(input.files||[])].slice(0,6);
-      info.textContent=escolhidas.length
-        ? (escolhidas.length===1?'1 foto selecionada.':escolhidas.length+' fotos selecionadas.')
-        : 'Nenhuma nova foto selecionada.';
-      salvar.disabled=!escolhidas.length;
-    }}
-    cam.addEventListener('change',()=>selecionar(cam));
-    gal.addEventListener('change',()=>selecionar(gal));
-
-    function comprimir(file){{
-      return new Promise(resolve=>{{
-        if(!file.type.startsWith('image/')){{resolve(file);return}}
-        const img=new Image(), url=URL.createObjectURL(file);
-        img.onload=()=>{{
-          let w=img.naturalWidth||img.width,h=img.naturalHeight||img.height;
-          const max=1400;
-          if(w>max||h>max){{const s=Math.min(max/w,max/h);w=Math.round(w*s);h=Math.round(h*s)}}
-          const canvas=document.createElement('canvas');
-          canvas.width=w;canvas.height=h;
-          canvas.getContext('2d').drawImage(img,0,0,w,h);
-          URL.revokeObjectURL(url);
-          canvas.toBlob(blob=>resolve(blob||file),'image/jpeg',0.8);
-        }};
-        img.onerror=()=>{{URL.revokeObjectURL(url);resolve(file)}};
-        img.src=url;
-      }});
-    }}
-
-    salvar.addEventListener('click',async()=>{{
-      if(!escolhidas.length)return;
-      salvar.disabled=true;
-      salvar.textContent='SALVANDO...';
-      try{{
-        const fd=new FormData();
-        for(let i=0;i<escolhidas.length;i++){{
-          statusEl.textContent='Preparando foto '+(i+1)+' de '+escolhidas.length+'...';
-          const blob=await comprimir(escolhidas[i]);
-          fd.append('fotos',blob,'foto_'+(i+1)+'.jpg');
-        }}
-        statusEl.textContent='Enviando para o Supabase...';
-        const r=await fetch('/api/upload-fotos/{pid}',{{method:'POST',body:fd,cache:'no-store'}});
-        let d={{}};
-        try{{d=await r.json()}}catch(e){{}}
-        if(!r.ok||!d.ok)throw new Error(d.erro||('Erro HTTP '+r.status));
-        statusEl.textContent='✅ '+d.salvas+' foto(s) salva(s) com sucesso.';
-        localStorage.removeItem('getres_catalogo');
-        if('caches' in window){{try{{for(const k of await caches.keys())await caches.delete(k)}}catch(e){{}}}}
-        setTimeout(()=>location='/destaques?foto='+Date.now(),700);
-      }}catch(e){{
-        statusEl.textContent='❌ '+e.message;
-        salvar.disabled=false;
-        salvar.textContent='💾 SALVAR FOTOS';
+    function atualizarSelecao(input) {{
+      const n=input.files ? input.files.length : 0;
+      if(n>0) {{
+        info.textContent = n===1 ? '1 nova foto selecionada.' : n+' novas fotos selecionadas.';
+        botao.disabled=false;
       }}
-    }});
+    }}
+    cam.addEventListener('change',()=>atualizarSelecao(cam));
+    gal.addEventListener('change',()=>atualizarSelecao(gal));
     </script>"""
     return page("Fotos",body)
 
 @app.route("/foto-principal/<int:pid>/<int:fid>")
 def foto_principal(pid,fid):
     c=db(); c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(pid,))
-    f=c.execute("SELECT arquivo,dados,mime FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
+    f=c.execute("SELECT arquivo FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
     if f:
         c.execute("UPDATE fotos SET principal=1 WHERE id=?",(fid,))
-        c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
-                  (f["arquivo"],psycopg2.Binary(bytes(f["dados"])) if f.get("dados") is not None else None,
-                   f.get("mime") or "image/jpeg",pid))
+        c.execute("UPDATE produtos SET imagem=? WHERE id=?",(f["arquivo"],pid))
     c.commit();c.close();return redirect("/fotos/"+str(pid))
 
 @app.route("/foto-excluir/<int:pid>/<int:fid>")
 def foto_excluir(pid,fid):
-    c=db();f=c.execute("SELECT id,arquivo,principal FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
+    c=db();f=c.execute("SELECT * FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
     if f:
+        try: os.remove("static/produtos/"+f["arquivo"])
+        except: pass
         c.execute("DELETE FROM fotos WHERE id=?",(fid,))
         if f["principal"]:
-            n=c.execute("SELECT id,arquivo FROM fotos WHERE produto_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
+            n=c.execute("SELECT * FROM fotos WHERE produto_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
             if n:
                 c.execute("UPDATE fotos SET principal=1 WHERE id=?",(n["id"],))
-                nd=c.execute("SELECT dados,mime FROM fotos WHERE id=?",(n["id"],)).fetchone()
-                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
-                          (n["arquivo"],psycopg2.Binary(bytes(nd["dados"])) if nd and nd.get("dados") is not None else None,
-                           (nd.get("mime") if nd else None) or "image/jpeg",pid))
-            else:
-                c.execute("UPDATE produtos SET imagem='',imagem_dados=NULL,imagem_mime=NULL WHERE id=?",(pid,))
+                c.execute("UPDATE produtos SET imagem=? WHERE id=?",(n["arquivo"],pid))
+            else: c.execute("UPDATE produtos SET imagem='' WHERE id=?",(pid,))
     c.commit();c.close();return redirect("/fotos/"+str(pid))
 
 @app.route("/etiqueta/<int:pid>")
@@ -1118,26 +436,16 @@ def etiqueta(pid):
     c=db();p=c.execute("SELECT * FROM produtos WHERE id=?",(pid,)).fetchone();c.close()
     if not p:return "Produto não encontrado",404
     codigo=f"GETRES-{pid:05d}"
-    qr=qr_data_uri(codigo); C=conf(); largura=largura_impressao_mm(C)
-    logo_uri=logo_data_uri()
-    logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
-    texto=(f"BRECHÓ GETRES\\n{codigo}\\n{p['nome']}\\n{p['time_nome']}\\n"
-           f"Tam: {p['tamanho']} - {p['estado']}\\nR$ {p['preco']:.2f}\\n{codigo}")
-    botoes=botoes_impressao(texto)
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
-    <style>
-    @page{{size:{largura}mm auto;margin:0}}
-    *{{box-sizing:border-box}}
-    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;text-align:center;font:12px monospace;color:#000;background:#fff}}
-    h1{{font-size:18px}}.preco{{font-size:23px;font-weight:bold}}.qr{{width:27mm;height:27mm;object-fit:contain}}
-    button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}.acoes-impressao{{margin-top:8px}}
-    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
-    </style></head><body>
-    <div style="display:flex;align-items:center;justify-content:center;gap:2mm;margin-bottom:2mm">{logo}<h1 style="margin:0;font-size:3.2mm;line-height:1;white-space:nowrap">BRECHÓ GETRES</h1></div>
-    <b>{codigo}</b><hr>
+    qr=qr_data_uri(codigo); C=conf()
+    logo=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block;margin:0 auto 2mm'>" if C.get("logo") else "")
+    return f"""<!doctype html><meta name=viewport content='width=device-width'>
+    <style>body{{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}}
+    h1{{font-size:18px}}.preco{{font-size:23px;font-weight:bold}}img{{width:27mm;height:27mm}}
+    button{{width:100%;padding:12px}}@media print{{button{{display:none}}}}</style>
+    <div style="text-align:center">{logo}<h1 style="margin:0 0 2mm">BRECHÓ GETRES</h1></div><b>{codigo}</b><hr>
     <b>{p["nome"]}</b><p>{p["time_nome"]}<br>Tam: {p["tamanho"]} • {p["estado"]}</p>
-    <div class=preco>R$ {p["preco"]:.2f}</div><img class=qr src='{qr}'><br><b>{codigo}</b>
-    {botoes}</body></html>"""
+    <div class=preco>R$ {p["preco"]:.2f}</div><img src='{qr}'><br><b>{codigo}</b>
+    <button onclick=print()>🖨 IMPRIMIR ETIQUETA</button>"""
 
 
 @app.route("/carrinho")
@@ -1145,190 +453,30 @@ def carrinho():
     C=conf()
     try: taxa=float(str(C.get("taxa_entrega","0")).replace(",","."))
     except: taxa=0
-    html="""<h2>Carrinho</h2>
+    return page("Carrinho",f"""<h2>Carrinho</h2>
 <div id=itens class=box>Carregando...</div>
 <div class=box>
 <label>Como deseja receber?</label>
 <select id=entrega onchange=atualizarTotal()>
 <option value="retirada">Retirada no local — grátis</option>
-<option value="entrega">Entrega — taxa R$ __TAXA__</option>
+<option value="entrega">Entrega — taxa R$ {taxa:.2f}</option>
 </select>
 <div id=taxaInfo class=muted style="margin:8px 0 16px">Retirada no local: sem taxa.</div>
 <label>Pagamento</label>
 <select id=pag><option>PIX</option><option>Dinheiro</option><option>Débito</option><option>Crédito</option></select>
-<button id=btnFinalizar style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
-<div id=offlineInfo class=muted style="margin-top:12px"></div>
+<button style="width:100%" onclick=fechar()>FINALIZAR VENDA</button>
 </div>
 <script>
-let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega=Number('__TAXA__'), subtotal=0;
-function catalogoLocal(){try{return JSON.parse(localStorage.getItem('getres_catalogo')||'[]')}catch(e){return []}}
-function dadosLocais(){
-  const cat=catalogoLocal(), mapa={}; cat.forEach(x=>mapa[x.id]=x);
-  return ids.map(i=>mapa[i]).filter(Boolean);
-}
-async function carregar(){
-  try{
-    const r=await fetch('/api-cart?ids='+ids.join(','),{cache:'no-store'});
-    if(!r.ok)throw new Error();
-    const d=await r.json();window.d=d;subtotal=d.reduce((a,x)=>a+Number(x.preco),0);render(d);
-  }catch(e){
-    const d=dadosLocais();window.d=d;subtotal=d.reduce((a,x)=>a+Number(x.preco),0);render(d);
-    offlineInfo.textContent='Modo offline: usando catálogo salvo neste celular.';
-  }
-}
-function render(d){
-  let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
-  itens.innerHTML=d.map(x=>`<p>${x.nome} <b style="float:right">R$ ${Number(x.preco).toFixed(2)}</b></p>`).join('')+
-  `<hr><p>Subtotal <b style="float:right">R$ ${subtotal.toFixed(2)}</b></p>`+
-  (taxa?`<p>Taxa de entrega <b style="float:right">R$ ${taxa.toFixed(2)}</b></p>`:'')+
-  `<hr><b>Total: R$ ${total.toFixed(2)}</b>`;
-}
-function atualizarTotal(){taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${taxaEntrega.toFixed(2)}`:'Retirada no local: sem taxa.';render(window.d||[])}
-function uuidOffline(){return 'getres-'+Date.now()+'-'+Math.random().toString(16).slice(2)}
-function salvarOffline(transactionId){
-  const d=window.d||[]; if(!d.length)return alert('Não há dados do produto salvos para vender offline.');
-  const qtd={}; ids.forEach(id=>qtd[Number(id)]=(qtd[Number(id)]||0)+1);
-  for(const x of d){const precisa=qtd[Number(x.id)]||0,disp=Number(x.estoque||0);if(precisa>disp){alert('Estoque insuficiente para '+x.nome+'. Disponível: '+disp);return}}
-  const sale={
-    offline_id:transactionId||uuidOffline(),
-    criado_em:new Date().toISOString(),
-    pagamento:pag.value,
-    tipo_entrega:entrega.value,
-    taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,
-    total:subtotal+(entrega.value==='entrega'?taxaEntrega:0),
-    itens:d.map(x=>({id:Number(x.id),nome:x.nome,tamanho:x.tamanho||'',preco:Number(x.preco)}))
-  };
-  let q=getOfflineQueue();q.push(sale);setOfflineQueue(q);
-  saveOfflineHistory(sale,'PENDENTE',null,'');
-  // baixa o estoque do catálogo local imediatamente; o servidor fará a mesma baixa uma única vez na sincronização.
-  let cat=catalogoLocal(); const qtdBaixa={}; sale.itens.forEach(x=>qtdBaixa[x.id]=(qtdBaixa[x.id]||0)+1);
-  cat=cat.map(x=>qtdBaixa[x.id]?({...x,estoque:Math.max(0,Number(x.estoque||0)-qtdBaixa[x.id])}):x);
-  localStorage.setItem('getres_catalogo',JSON.stringify(cat));
-  localStorage.removeItem('g3cart');
-  showNetStatus();
-  alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
-  if(typeof abrirPedidosOfflineLocal==='function')abrirPedidosOfflineLocal();
-  else location='/pedidos';
-}
-let finalizandoVenda=false;
-async function fechar(){
-  if(finalizandoVenda)return;
-  if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
-  finalizandoVenda=true;
-  const btn=document.getElementById('btnFinalizar');
-  if(btn){btn.disabled=true;btn.textContent='FINALIZANDO...'}
-  const transactionId=uuidOffline();
-  const payload={ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0,offline_id:transactionId};
-  if(!navigator.onLine){salvarOffline(transactionId);return}
-  try{
-    const r=await fetch('/vender',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    const x=await r.json();
-    if(x.ok){localStorage.removeItem('g3cart');location='/venda/'+x.id;return}
-    alert(x.erro||'Não foi possível finalizar a venda.');
-    finalizandoVenda=false;if(btn){btn.disabled=false;btn.textContent='FINALIZAR VENDA'}
-  }catch(e){
-    // Se o servidor chegou a gravar antes de a conexão cair, o mesmo transactionId
-    // será usado na sincronização e o servidor reconhecerá a venda já existente.
-    salvarOffline(transactionId)
-  }
-}
-carregar();
-</script>"""
-    return page("Carrinho",html.replace("__TAXA__",f"{taxa:.2f}"))
-
-
-@app.route("/sync-offline-product",methods=["POST"])
-def sync_offline_product():
-    d=request.get_json() or {}; oid=str(d.get("offline_id") or "").strip()
-    if not oid or not str(d.get("nome") or "").strip(): return {"ok":False,"erro":"Produto offline inválido."},400
-    c=db(); ex=c.execute("SELECT id FROM produtos WHERE offline_id=?",(oid,)).fetchone()
-    if ex: c.close(); return {"ok":True,"id":ex["id"],"duplicado":True}
-    try:
-        imagens=d.get("imagens") or []; arquivos=[]
-        for data in imagens[:6]:
-            if not isinstance(data,str) or "," not in data: continue
-            cab,b64=data.split(",",1); mime=cab.split(";",1)[0].split(":",1)[1] if ":" in cab else "image/jpeg"
-            ext=".png" if "png" in mime else ".webp" if "webp" in mime else ".jpg"; arq=secrets.token_hex(10)+ext
-            try: dados=base64.b64decode(b64)
-            except Exception: continue
-            if dados: arquivos.append((arq,dados,mime))
-        produto_id=d.get("produto_id")
-        if produto_id:
-            atual=c.execute("SELECT id FROM produtos WHERE id=?",(int(produto_id),)).fetchone()
-            if not atual:
-                raise ValueError("Produto original não encontrado para edição offline.")
-            c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,descricao=? WHERE id=?",
-                      (d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),d.get("descricao",""),int(produto_id)))
-            pid=int(produto_id)
-            if arquivos:
-                c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(pid,))
-                for i,(a,dados,mime) in enumerate(arquivos):
-                    c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,a,1 if i==0 else 0,psycopg2.Binary(dados),mime))
-                a,dados,mime=arquivos[0]
-                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",(a,psycopg2.Binary(dados),mime,pid))
-        else:
-            img=arquivos[0][0] if arquivos else ""
-            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,ativo,offline_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(d.get("nome",""),d.get("time_nome",""),d.get("categoria",""),d.get("tamanho",""),d.get("estado",""),float(d.get("preco") or 0),int(d.get("estoque") or 0),img,d.get("descricao",""),1,oid)); pid=cur.lastrowid
-            for i,(a,dados,mime) in enumerate(arquivos): c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,a,1 if i==0 else 0,psycopg2.Binary(dados),mime))
-        c.commit();c.close();return {"ok":True,"id":pid,"operacao":"editar" if produto_id else "novo"}
-    except Exception as e:
-        c.rollback();c.close();return {"ok":False,"erro":str(e)},400
-
-@app.route("/offline/catalogo")
-def offline_catalogo():
-    c=db()
-    rows=c.execute("SELECT id,nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao,offline_id FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall()
-    c.close()
-    return [dict(r) for r in rows]
-
-@app.route("/sync-offline-sale",methods=["POST"])
-def sync_offline_sale():
-    d=request.get_json() or {}; offline_id=str(d.get("offline_id") or "").strip(); itens=d.get("itens") or []
-    if not offline_id or not itens: return {"ok":False,"erro":"Pedido offline inválido."},400
-    c=db(); existente=c.execute("SELECT * FROM vendas WHERE offline_id=? FOR UPDATE",(offline_id,)).fetchone()
-    if existente:
-        vid=existente["id"]
-        if not int(existente.get("estoque_baixado") or 0):
-            try:
-                itens_exist=json.loads(existente["itens"] or "[]")
-            except Exception:
-                itens_exist=[]
-            contagem_exist={}
-            for item in itens_exist:
-                pid=item.get("id")
-                if pid: contagem_exist[int(pid)]=contagem_exist.get(int(pid),0)+1
-            for pid,qtd in contagem_exist.items():
-                r=c.execute("SELECT estoque,nome FROM produtos WHERE id=? FOR UPDATE",(pid,)).fetchone()
-                if not r or int(r["estoque"] or 0)<qtd:
-                    c.rollback();c.close()
-                    return {"ok":False,"erro":f"Estoque insuficiente para {r['nome'] if r else 'Produto'}."},409
-            for pid,qtd in contagem_exist.items():
-                c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
-            c.execute("UPDATE vendas SET estoque_baixado=1,estoque_devolvido=0 WHERE id=?",(vid,))
-            c.commit()
-        c.close();return {"ok":True,"id":vid,"duplicado":True}
-    try:
-        total=0.0; itens_servidor=[]; contagem={}
-        for item in itens:
-            pid=int(item.get("id"));contagem[pid]=contagem.get(pid,0)+1
-        # trava os produtos enquanto confere/baixa estoque para impedir venda duplicada concorrente
-        for pid,qtd in contagem.items():
-            r=c.execute("SELECT * FROM produtos WHERE id=? AND COALESCE(ativo,1)=1 FOR UPDATE",(pid,)).fetchone()
-            if not r: raise ValueError(f"Produto {pid} não existe mais.")
-            if int(r["estoque"] or 0)<qtd: raise ValueError(f"Estoque insuficiente para {r['nome']}.")
-            for _ in range(qtd): itens_servidor.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":float(r["preco"] or 0)}); total+=float(r["preco"] or 0)
-            c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
-        tipo=d.get("tipo_entrega","retirada"); taxa=0.0
-        if tipo=="entrega":
-            try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
-            except Exception: taxa=0.0
-        total+=taxa
-        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?,?)",(d.get("criado_em") or datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens_servidor,ensure_ascii=False),tipo,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id,1)); vid=cur.lastrowid
-        c.commit();c.close();return {"ok":True,"id":vid,"sincronizado":True}
-    except psycopg2.IntegrityError:
-        c.rollback(); r=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone(); vid=r["id"] if r else None; c.close(); return {"ok":True,"id":vid,"duplicado":True}
-    except Exception as e:
-        c.rollback();c.close();return {"ok":False,"erro":str(e)},409
+let ids=JSON.parse(localStorage.g3cart||'[]'), taxaEntrega={taxa:.2f}, subtotal=0;
+fetch('/api-cart?ids='+ids.join(',')).then(x=>x.json()).then(d=>{{window.d=d;subtotal=d.reduce((s,x)=>s+x.preco,0);render(d)}});
+function render(d){{let taxa=entrega.value==='entrega'?taxaEntrega:0,total=subtotal+taxa;
+itens.innerHTML=d.map(x=>`<p>${{x.nome}} <b style="float:right">R$ ${{x.preco.toFixed(2)}}</b></p>`).join('')+
+`<hr><p>Subtotal <b style="float:right">R$ ${{subtotal.toFixed(2)}}</b></p>`+
+(taxa?`<p>Taxa de entrega <b style="float:right">R$ ${{taxa.toFixed(2)}}</b></p>`:'')+
+`<hr><b>Total: R$ ${{total.toFixed(2)}}</b>`}}
+function atualizarTotal(){{taxaInfo.textContent=entrega.value==='entrega'?`Entrega: taxa de R$ ${{taxaEntrega.toFixed(2)}}`:'Retirada no local: sem taxa.';render(window.d||[])}}
+function fechar(){{if(!ids.length || !window.d || !window.d.length || subtotal<=0){{alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}}fetch('/vender',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{ids,pagamento:pag.value,tipo_entrega:entrega.value,taxa_entrega:entrega.value==='entrega'?taxaEntrega:0}})}}).then(x=>x.json()).then(x=>{{if(x.ok){{localStorage.removeItem('g3cart');location='/venda/'+x.id}}else alert(x.erro)}})}}
+</script>""")
 
 @app.route("/api-cart")
 def api_cart():
@@ -1343,53 +491,25 @@ def api_cart():
 @app.route("/vender",methods=["POST"])
 def vender():
     d=request.get_json() or {}
-    offline_id=str(d.get("offline_id") or "").strip() or None
-    ids=d.get("ids",[]) or []
+    ids=d.get("ids",[])
     if not ids:
         return {"ok":False,"erro":"Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar."},400
-    try:
-        ids=[int(x) for x in ids]
-    except Exception:
-        return {"ok":False,"erro":"Carrinho inválido."},400
-    contagem={}
-    for pid in ids: contagem[pid]=contagem.get(pid,0)+1
-    c=db(); itens=[]; total=0.0
-    if offline_id:
-        existente=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
-        if existente:
-            vid=existente["id"];c.close()
-            return {"ok":True,"id":vid,"duplicado":True}
-    try:
-        # Trava, valida e reserva o estoque no momento em que a venda é finalizada.
-        # Confirmar pagamento depois não baixa novamente.
-        for pid,qtd in contagem.items():
-            r=c.execute("SELECT * FROM produtos WHERE id=? AND COALESCE(ativo,1)=1 FOR UPDATE",(pid,)).fetchone()
-            if not r or int(r["estoque"] or 0)<qtd:
-                nome=r["nome"] if r else "Produto"
-                raise ValueError(f"Estoque insuficiente para {nome}.")
-            for _ in range(qtd):
-                itens.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":float(r["preco"] or 0)})
-                total+=float(r["preco"] or 0)
-            c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
-        if not itens or total<=0: raise ValueError("Não é possível finalizar uma venda com total R$ 0,00.")
-        tipo_entrega=d.get("tipo_entrega","retirada")
-        taxa=0.0
-        if tipo_entrega=="entrega":
-            try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
-            except Exception: taxa=0.0
-        total+=taxa
-        cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido,offline_id,estoque_baixado) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                      (datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(itens,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0,offline_id,1))
-        vid=cur.lastrowid; c.commit(); c.close(); return {"ok":True,"id":vid}
-    except psycopg2.IntegrityError:
-        c.rollback()
-        if offline_id:
-            r=c.execute("SELECT id FROM vendas WHERE offline_id=?",(offline_id,)).fetchone()
-            if r:
-                vid=r["id"];c.close();return {"ok":True,"id":vid,"duplicado":True}
-        c.close();return {"ok":False,"erro":"Não foi possível concluir a venda."},409
-    except Exception as e:
-        c.rollback(); c.close(); return {"ok":False,"erro":str(e)},409
+    c=db();it=[];total=0
+    for i in ids:
+        r=c.execute("SELECT * FROM produtos WHERE id=?",(i,)).fetchone()
+        if not r or r["estoque"]<1:c.close();return {"ok":False,"erro":"Produto sem estoque"}
+        it.append({"id":r["id"],"nome":r["nome"],"tamanho":r["tamanho"],"preco":r["preco"]});total+=r["preco"]
+    if not it or total<=0:
+        c.rollback();c.close()
+        return {"ok":False,"erro":"Não é possível finalizar uma venda com total R$ 0,00."},400
+    tipo_entrega=d.get("tipo_entrega","retirada")
+    taxa=0
+    if tipo_entrega=="entrega":
+        try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
+        except: taxa=0
+    total+=taxa
+    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
+    vid=cur.lastrowid;c.commit();c.close();return {"ok":True,"id":vid}
 
 @app.route("/venda/<int:vid>")
 def venda(vid):
@@ -1432,120 +552,70 @@ def venda(vid):
 
 @app.route("/confirmar-pagamento/<int:vid>",methods=["POST"])
 def confirmar_pagamento(vid):
-    c=db(); v=c.execute("SELECT * FROM vendas WHERE id=? FOR UPDATE",(vid,)).fetchone()
-    if not v: c.close(); return "Venda não encontrada",404
+    c=db()
+    v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone()
+    if not v:
+        c.close()
+        return "Venda não encontrada",404
     if (v["status"] or "AGUARDANDO_PAGAMENTO") in ("ATIVO","AGUARDANDO_PAGAMENTO"):
         try: itens=json.loads(v["itens"] or "[]")
         except Exception: itens=[]
-        if not int(v.get("estoque_baixado") or 0):
-            contagem={}
-            for item in itens:
-                pid=item.get("id")
-                if pid: contagem[pid]=contagem.get(pid,0)+1
-            for pid,qtd in contagem.items():
-                r=c.execute("SELECT estoque,nome FROM produtos WHERE id=? FOR UPDATE",(pid,)).fetchone()
-                if not r or int(r["estoque"] or 0)<qtd:
-                    disponivel=int(r["estoque"] or 0) if r else 0; nome=r["nome"] if r else "Produto"; c.rollback();c.close()
-                    return page("Estoque insuficiente",f"<h2>⚠️ Estoque insuficiente</h2><div class=box><b>{nome}</b><p>Disponível: <b>{disponivel}</b></p><p>O pagamento não foi confirmado.</p><a class=btn href='/carrinho'>← VOLTAR AO CARRINHO</a></div>"),400
-            for pid,qtd in contagem.items(): c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
-        c.execute("UPDATE vendas SET status='PAGO',estoque_devolvido=0,estoque_baixado=1 WHERE id=?",(vid,)); c.commit()
-    c.close(); return redirect("/venda/"+str(vid))
+        # Confere todo o estoque antes de alterar qualquer produto.
+        for item in itens:
+            pid=item.get("id")
+            if not pid: continue
+            qtd=sum(1 for x in itens if x.get("id")==pid)
+            r=c.execute("SELECT estoque,nome FROM produtos WHERE id=?",(pid,)).fetchone()
+            if not r or r["estoque"] < qtd:
+                disponivel=int(r["estoque"]) if r else 0
+                c.close(); nome=r["nome"] if r else "Produto"
+                return page("Estoque insuficiente",f"<h2>⚠️ Estoque insuficiente</h2><div class=box><b>{nome}</b><p>Disponível: <b>{disponivel}</b></p><p>O pagamento não foi confirmado.</p><a class=btn href='/carrinho'>← VOLTAR AO CARRINHO</a></div>"),400
+        # O estoque só é baixado quando o pagamento é confirmado.
+        processados=set()
+        for item in itens:
+            pid=item.get("id")
+            if not pid or pid in processados: continue
+            qtd=sum(1 for x in itens if x.get("id")==pid)
+            c.execute("UPDATE produtos SET estoque=estoque-? WHERE id=?",(qtd,pid))
+            processados.add(pid)
+        c.execute("UPDATE vendas SET status='PAGO', estoque_devolvido=0 WHERE id=?",(vid,))
+        c.commit()
+    c.close()
+    return redirect("/venda/"+str(vid))
 
 
 @app.route("/cancelar-pedido/<int:vid>",methods=["POST"])
 def cancelar_pedido(vid):
-    c=db(); v=c.execute("SELECT * FROM vendas WHERE id=? FOR UPDATE",(vid,)).fetchone()
-    if not v: c.close(); return "Venda não encontrada",404
+    c=db(); v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone()
+    if not v:
+        c.close(); return "Venda não encontrada",404
     status_atual=v["status"] or "AGUARDANDO_PAGAMENTO"
     if status_atual!="CANCELADO":
-        if int(v.get("estoque_baixado") or 0) and not int(v.get("estoque_devolvido") or 0):
+        # Pedido ATIVO ainda não baixou estoque, então cancelar não altera o estoque.
+        # Se futuramente houver cancelamento de pedido PAGO, devolve o estoque uma única vez.
+        if status_atual=="PAGO" and not v["estoque_devolvido"]:
             try: itens=json.loads(v["itens"] or "[]")
             except Exception: itens=[]
-            contagem={}
             for item in itens:
                 pid=item.get("id")
-                if pid: contagem[pid]=contagem.get(pid,0)+1
-            for pid,qtd in contagem.items(): c.execute("UPDATE produtos SET estoque=estoque+? WHERE id=?",(qtd,pid))
+                if pid: c.execute("UPDATE produtos SET estoque=estoque+1 WHERE id=?",(pid,))
             c.execute("UPDATE vendas SET estoque_devolvido=1 WHERE id=?",(vid,))
-        c.execute("UPDATE vendas SET status='CANCELADO' WHERE id=?",(vid,)); c.commit()
-    c.close(); return redirect("/venda/"+str(vid))
+        c.execute("UPDATE vendas SET status='CANCELADO' WHERE id=?",(vid,))
+        c.commit()
+    c.close()
+    return redirect("/venda/"+str(vid))
 
 @app.route("/comprovante/<int:vid>")
 def comprovante(vid):
     c=db();v=c.execute("SELECT * FROM vendas WHERE id=?",(vid,)).fetchone();c.close();C=conf()
-    if not v:return "Venda não encontrada",404
-    itens=json.loads(v["itens"] or "[]")
-    linhas="".join(f"<p style='overflow-wrap:anywhere;margin:5px 0'>{x['nome']} {x.get('tamanho','')}<br>R$ {float(x['preco']):.2f}</p>" for x in itens)
-    logo_uri=logo_data_uri(); largura=largura_impressao_mm(C)
-    logo=(f"<img src='{logo_uri}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block'>" if logo_uri else "<span style='font-size:24px;font-weight:bold'>♧</span>")
-    itens_txt="\\n".join(f"{x['nome']} {x.get('tamanho','')} - R$ {float(x['preco']):.2f}" for x in itens)
-    entrega_txt=(f"ENTREGA - Taxa R$ {float(v['taxa_entrega'] or 0):.2f}" if v["tipo_entrega"]=="entrega" else "RETIRADA NO LOCAL")
-    texto=(f"{C.get('nome','BRECHÓ GETRES')}\\n{C.get('cnpj','')}\\n{C.get('endereco','')}\\n"
-           f"COMPROVANTE #{vid}\\n{itens_txt}\\n{entrega_txt}\\nTOTAL R$ {float(v['total']):.2f}\\n"
-           f"{v['pagamento']}\\n{C.get('mensagem','')}")
-    botoes=botoes_impressao(texto)
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
-    <style>
-    @page{{size:{largura}mm auto;margin:0}}
-    *{{box-sizing:border-box}}
-    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;font:12px monospace;color:#000;background:#fff;text-align:center}}
-    hr{{border:0;border-top:1px dashed #000}}button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}
-    .marca{{display:flex;align-items:center;justify-content:center;gap:5px}}.acoes-impressao{{margin-top:8px}}
-    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
-    </style></head><body>
-    <div class=marca>{logo}<h2 style="margin:0;font-size:15px;line-height:1;white-space:nowrap">{C['nome']}</h2></div>
-    <p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr>
-    <p>{entrega_txt}</p><h3>TOTAL R$ {float(v['total']):.2f}</h3>
-    <p>{v['pagamento']}<br>{C['mensagem']}</p>{botoes}</body></html>"""
-
+    itens=json.loads(v["itens"]);linhas="".join(f"<p style='overflow-wrap:anywhere'>{x['nome']} {x['tamanho']}<br>R$ {x['preco']:.2f}</p>" for x in itens)
+    logo=(f"<img src='/logo-getres?v={int(datetime.now().timestamp())}' alt='Logo' style='width:12mm;height:12mm;object-fit:contain;display:block;margin:0 auto 2mm'>" if C.get("logo") else "")
+    return f"""<!doctype html><meta name=viewport content='width=device-width'><style>body{{width:54mm;margin:auto;font:12px monospace;color:#000;background:#fff;text-align:center}}hr{{border:0;border-top:1px dashed}}button{{width:100%;padding:12px}}.marca{{display:flex;align-items:center;justify-content:center;gap:5px}}@media print{{button{{display:none}}}}</style><div class=marca style="display:block">{logo}<h2 style="margin:0 0 2mm">{C['nome']}</h2></div><p>{C['cnpj']}<br>{C['endereco']}</p><hr><b>COMPROVANTE #{vid}</b>{linhas}<hr><p>{'ENTREGA - Taxa R$ %.2f' % v['taxa_entrega'] if v['tipo_entrega']=='entrega' else 'RETIRADA NO LOCAL'}</p><h3>TOTAL R$ {v['total']:.2f}</h3><p>{v['pagamento']}<br>{C['mensagem']}</p><button onclick=print()>IMPRIMIR / RAWBT</button>"""
 
 @app.route("/pedidos")
 def pedidos():
     c=db();rows=c.execute("SELECT * FROM vendas ORDER BY id DESC").fetchall();c.close()
-    x="<h2>Pedidos</h2><div id=pedidosOffline></div>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
-    server_orders=json.dumps([{
-        "id":int(r["id"]),
-        "total":float(r["total"] or 0),
-        "status":str(r["status"] or "AGUARDANDO_PAGAMENTO"),
-        "pagamento":str(r["pagamento"] or ""),
-        "tipo_entrega":str(r["tipo_entrega"] or "retirada"),
-        "taxa_entrega":float(r["taxa_entrega"] or 0),
-        "data":str(r["data"] or "")
-    } for r in rows],ensure_ascii=False)
-    x+="<script>try{localStorage.setItem('getres_server_orders',JSON.stringify("+server_orders+"))}catch(e){}</script>"
-    x+="""<script>
-function renderPedidosOffline(){
-  const el=document.getElementById('pedidosOffline');if(!el)return;
-  const q=getOfflineQueue();
-  let h=getOfflineHistory();
-  // Recupera pedidos pendentes antigos para o histórico local, caso tenham sido salvos antes desta correção.
-  q.forEach(p=>{if(!h.some(x=>x.offline_id===p.offline_id))h.unshift({...p,local_status:'PENDENTE'})});
-  setOfflineHistory(h.slice(0,100));
-  const pendentes=q.map(p=>({...p,local_status:'PENDENTE'}));
-  const idsPendentes=new Set(pendentes.map(p=>p.offline_id));
-  const sincronizados=h.filter(p=>!idsPendentes.has(p.offline_id) && p.local_status==='SINCRONIZADO').slice(0,5);
-  const lista=[...pendentes,...sincronizados];
-  const acoes=getOfflineActions();
-  const avisos=acoes.map(a=>`<div class=box style="border-color:#2f8f46"><b>${a.tipo==='confirmar'?'✅ Pagamento confirmado offline':'❌ Cancelamento salvo offline'} • Venda #${a.vid}</b><div class=muted>Será sincronizado automaticamente quando a internet voltar.</div></div>`).join('');
-  if(!lista.length&&!acoes.length){el.innerHTML='';return}
-  el.innerHTML=avisos+lista.map((p,i)=>{
-    const subtotal=(p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0);
-    const total=subtotal+Number(p.taxa_entrega||0);
-    const pendente=p.local_status!=='SINCRONIZADO';
-    const st=pendente?'⏳ AGUARDANDO SINCRONIZAÇÃO':`✅ SINCRONIZADO${p.server_id?' • Venda #'+p.server_id:''}`;
-    const erro=p.last_error?`<div class=muted style="color:#ff9b9b">${p.last_error}</div>`:'';
-    const btn=pendente?`<button class=danger style="width:100%;margin-top:12px" onclick="excluirOffline('${p.offline_id}')">🗑️ EXCLUIR PEDIDO OFFLINE</button>`:'';
-    return `<div class=box style="border-color:${pendente?'#a87920':'#2f8f46'}"><div class=row><div><b>📴 Pedido offline</b><div class=muted>${st}</div>${erro}</div><b>R$ ${total.toFixed(2)}</b></div>${btn}</div>`;
-  }).join('');
-}
-function excluirOffline(offlineId){
-  if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
-  let q=getOfflineQueue().filter(x=>x.offline_id!==offlineId);setOfflineQueue(q);
-  let h=getOfflineHistory().filter(x=>x.offline_id!==offlineId);setOfflineHistory(h);
-  renderPedidosOffline();showNetStatus();
-}
-renderPedidosOffline();
-</script>"""
+    x="<h2>Pedidos</h2>"+''.join(f"<a class='box row' style='display:flex;color:white;text-decoration:none' href='/venda/{r['id']}'><div><b>Venda #{r['id']}</b><div class=muted>{'❌ CANCELADO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='CANCELADO' else ('✅ PAGO' if (r['status'] or 'AGUARDANDO_PAGAMENTO')=='PAGO' else '⏳ AGUARDANDO PAGAMENTO')}</div></div><span>R$ {r['total']:.2f}</span></a>" for r in rows)
     return page("Pedidos",x)
 
 @app.route("/menu")
@@ -1554,437 +624,80 @@ def menu():
 
 @app.route("/estatisticas")
 def estatisticas():
-    C=conf()
-    inicio=str(C.get("estatisticas_inicio","") or "").strip()
-
     c=db()
-    params=()
-    where=""
-    if inicio:
-        where=" WHERE data>=?"
-        params=(inicio,)
-
-    vendas=int(c.execute("SELECT COUNT(*) n FROM vendas"+where,params).fetchone()["n"] or 0)
-    pagos=int(c.execute("SELECT COUNT(*) n FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='PAGO'",params).fetchone()["n"] or 0)
-    cancelados=int(c.execute("SELECT COUNT(*) n FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='CANCELADO'",params).fetchone()["n"] or 0)
-    faturamento=float(c.execute("SELECT COALESCE(SUM(total),0) s FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='PAGO'",params).fetchone()["s"] or 0)
-    ticket=(faturamento/pagos) if pagos else 0.0
-
-    rows=c.execute("SELECT itens FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='PAGO'",params).fetchall()
-    unidades=0
-    for r in rows:
-        try: unidades+=len(json.loads(r["itens"] or "[]"))
-        except Exception: pass
-
-    estoque=int(c.execute("SELECT COALESCE(SUM(estoque),0) s FROM produtos WHERE COALESCE(ativo,1)=1").fetchone()["s"] or 0)
+    pagos=c.execute("SELECT * FROM vendas WHERE status='PAGO' ORDER BY id DESC").fetchall()
+    ativos=c.execute("SELECT COUNT(*) n FROM vendas WHERE COALESCE(status,'AGUARDANDO_PAGAMENTO') IN ('ATIVO','AGUARDANDO_PAGAMENTO')").fetchone()["n"]
+    cancelados=c.execute("SELECT COUNT(*) n FROM vendas WHERE status='CANCELADO'").fetchone()["n"]
+    agora=datetime.now(); hoje=agora.strftime("%Y-%m-%d"); mes=agora.strftime("%Y-%m")
+    fat=sum(float(v["total"] or 0) for v in pagos)
+    fat_hoje=sum(float(v["total"] or 0) for v in pagos if str(v["data"] or "").startswith(hoje))
+    fat_mes=sum(float(v["total"] or 0) for v in pagos if str(v["data"] or "").startswith(mes))
+    ticket=fat/len(pagos) if pagos else 0
+    formas={}; vendidos={}; unidades=0
+    for v in pagos:
+        pg=(v["pagamento"] or "Não informado").strip()
+        formas[pg]=formas.get(pg,0)+float(v["total"] or 0)
+        try: itens=json.loads(v["itens"] or "[]")
+        except Exception: itens=[]
+        for item in itens:
+            nome=item.get("nome") or "Produto"
+            vendidos[nome]=vendidos.get(nome,0)+1; unidades+=1
+    top=sorted(vendidos.items(),key=lambda x:(-x[1],x[0].lower()))[:5]
+    produtos=c.execute("SELECT nome,estoque FROM produtos ORDER BY estoque ASC,nome").fetchall()
+    estoque_total=sum(int(p["estoque"] or 0) for p in produtos)
+    sem=[p["nome"] for p in produtos if int(p["estoque"] or 0)<=0]
     c.close()
-
-    periodo=(f"<div class=muted>Período iniciado em: {inicio.replace('T',' ')}</div>" if inicio else "<div class=muted>Período: todo o histórico</div>")
-
+    moeda=lambda v:("R$ %.2f"%v).replace(".",",")
+    formas_html="".join(f"<div class='box row' style='display:flex'><b>{k}</b><span>{moeda(v)}</span></div>" for k,v in sorted(formas.items())) or "<div class=box>Nenhum pagamento confirmado ainda.</div>"
+    top_html="".join(f"<div class='box row' style='display:flex'><b>{n}</b><span>{q} un.</span></div>" for n,q in top) or "<div class=box>Nenhum produto vendido ainda.</div>"
+    sem_html="".join(f"<div class=box>⚠️ {n}</div>" for n in sem) or "<div class=box>✅ Nenhum produto sem estoque.</div>"
     body=f"""<h2>📊 Estatísticas</h2>
-    <div class=box>{periodo}</div>
     <div class=grid>
-      <div class=box><b>Vendas</b><div class=price>{vendas}</div></div>
-      <div class=box><b>Pagas</b><div class=price>{pagos}</div></div>
-      <div class=box><b>Canceladas</b><div class=price>{cancelados}</div></div>
-      <div class=box><b>Unidades vendidas</b><div class=price>{unidades}</div></div>
-      <div class=box><b>Faturamento</b><div class=price>R$ {faturamento:.2f}</div></div>
-      <div class=box><b>Ticket médio</b><div class=price>R$ {ticket:.2f}</div></div>
-      <div class=box><b>Estoque atual</b><div class=price>{estoque}</div></div>
-    </div>
-    <div class=box style='margin-top:18px'>
-      <h3>🧹 Dados de teste</h3>
-      <p class=muted>Use este botão para zerar apenas a visualização das estatísticas. Pedidos, vendas, produtos, fotos, estoque e configurações não são apagados.</p>
-      <form method=post action='/reset-estatisticas' onsubmit="return confirm('Zerar as estatísticas a partir de agora? O histórico de vendas será mantido.')">
-        <button class=danger style='width:100%'>🧹 ZERAR ESTATÍSTICAS DE TESTE</button>
-      </form>
-    </div>"""
+    <div class=box><div class=muted>💰 Faturamento total</div><div class=price>{moeda(fat)}</div><small>Somente pedidos PAGOS</small></div>
+    <div class=box><div class=muted>📅 Vendas de hoje</div><div class=price>{moeda(fat_hoje)}</div></div>
+    <div class=box><div class=muted>🗓️ Vendas do mês</div><div class=price>{moeda(fat_mes)}</div></div>
+    <div class=box><div class=muted>🎫 Ticket médio</div><div class=price>{moeda(ticket)}</div></div>
+    <div class=box><b>✅ Pedidos pagos</b><div class=price>{len(pagos)}</div></div>
+    <div class=box><b>⏳ Aguardando pagamento</b><div class=price>{ativos}</div></div>
+    <div class=box><b>❌ Pedidos cancelados</b><div class=price>{cancelados}</div></div>
+    <div class=box><b>👕 Unidades vendidas</b><div class=price>{unidades}</div></div>
+    <div class=box><b>📦 Estoque atual</b><div class=price>{estoque_total}</div></div></div>
+    <h3>💳 Faturamento por pagamento</h3>{formas_html}
+    <h3>🏆 Produtos mais vendidos</h3>{top_html}
+    <h3>⚠️ Produtos sem estoque</h3>{sem_html}"""
     return page("Estatísticas",body)
-
-
-@app.route("/reset-estatisticas",methods=["POST"])
-def reset_estatisticas():
-    agora=datetime.now().isoformat(timespec="seconds")
-    c=db()
-    c.execute("INSERT INTO config(chave,valor) VALUES('estatisticas_inicio',?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(agora,))
-    c.commit();c.close()
-    return redirect("/estatisticas")
-
-
-@app.route("/restaurar-estatisticas",methods=["POST"])
-def restaurar_estatisticas():
-    c=db()
-    c.execute("INSERT INTO config(chave,valor) VALUES('estatisticas_inicio','') ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor")
-    c.commit();c.close()
-    return redirect("/estatisticas")
-
 
 @app.route("/config",methods=["GET","POST"])
 def config():
     if request.method=="POST":
         c=db()
-        for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem",
-                  "impressora","largura_papel","impressora_nome","impressora_ip","impressora_porta",
-                  "taxa_entrega"]:
-            c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",
-                      (k,request.form.get(k,"")))
+        for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem","impressora","taxa_entrega"]:
+            c.execute("INSERT OR REPLACE INTO config VALUES(?,?)",(k,request.form.get(k,"")))
         logo=request.files.get("logo")
         if logo and logo.filename:
-            dados=logo.read(); mime=logo.mimetype or "image/png"
-            if dados:
-                uri="data:"+mime+";base64,"+base64.b64encode(dados).decode("ascii")
-                c.execute("INSERT INTO config(chave,valor) VALUES('logo',?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(uri,))
+            ext=os.path.splitext(logo.filename)[1].lower() or ".png"; arq="logo_getres"+ext
+            logo.save("static/"+arq); c.execute("INSERT OR REPLACE INTO config VALUES('logo',?)",(arq,))
         c.commit();c.close();return redirect("/config")
-
-    C=conf()
-    labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX",
-            "whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço",
-            "mensagem":"Mensagem do comprovante","taxa_entrega":"Taxa de entrega (R$)"}
-    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C.get(k,'')}'>" for k in labels)
-
-    modo=str(C.get("impressora","android") or "android")
-    larg=str(C.get("largura_papel","58"))
-    def selected(v): return "selected" if modo==v else ""
-    sel58="selected" if larg!="80" else ""
-    sel80="selected" if larg=="80" else ""
-
-    printer=f"""
-    <h3>🖨️ Impressora térmica</h3>
-    <label>Método de impressão</label>
-    <select name='impressora'>
-      <option value='android' {selected('android')}>Android padrão — recomendado e gratuito</option>
-      <option value='compartilhar' {selected('compartilhar')}>Compartilhar para aplicativo de impressão</option>
-      <option value='escpos' {selected('escpos')}>ESC/POS genérico</option>
-      <option value='usb' {selected('usb')}>USB / OTG via serviço Android</option>
-      <option value='wifi' {selected('wifi')}>Wi‑Fi / IP via serviço/plugin Android</option>
-      <option value='rawbt' {selected('rawbt')}>RawBT — opcional</option>
-      <option value='bluetooth_nativo' {selected('bluetooth_nativo')}>Bluetooth direto — para futura versão Android nativa</option>
-    </select>
-
-    <label>Largura do papel</label>
-    <select name='largura_papel'>
-      <option value='58' {sel58}>58 mm — portátil mais comum</option>
-      <option value='80' {sel80}>80 mm — recibo largo</option>
-    </select>
-
-    <label>Nome/modelo da impressora</label>
-    <input name='impressora_nome' value='{C.get("impressora_nome","")}' placeholder='Ex.: XPrinter XP-P323B, Elgin, Epson...'>
-
-    <label>IP da impressora (opcional)</label>
-    <input name='impressora_ip' value='{C.get("impressora_ip","")}' placeholder='Ex.: 192.168.1.50'>
-
-    <label>Porta ESC/POS (opcional)</label>
-    <input name='impressora_porta' value='{C.get("impressora_porta","9100")}' inputmode='numeric'>
-
-    <div class=box style='margin-top:12px'>
-      <b>Compatibilidade</b>
-      <p class=muted>O app não exige RawBT. Você pode usar o serviço de impressão gratuito do Android, plugin do fabricante, USB/OTG, Wi‑Fi/IP, compartilhamento ou outro app ESC/POS instalado.</p>
-      <p class=muted>Bluetooth clássico direto não é universal dentro do navegador; por isso fica reservado para uma futura versão Android nativa/híbrida.</p>
-    </div>
-
-    <a class=btn href='/teste'>🧾 TESTAR IMPRESSORA</a>
-    """
-    return page("Configurações",
-        f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}{printer}"
-        f"<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'>"
-        f"<p class=muted>Usada no comprovante e etiqueta. A nova logo fica salva no Supabase.</p>"
-        f"<button style='width:100%'>SALVAR</button></form>")
-
+    C=conf();labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX","whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço","mensagem":"Mensagem do comprovante","impressora":"Impressora","taxa_entrega":"Taxa de entrega (R$)"}
+    fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>" for k in labels)
+    return page("Configurações",f"<h2>Configurações</h2><form method=post enctype='multipart/form-data' class=box>{fs}<label>Logo do BRECHÓ GETRES</label><input type=file name=logo accept='image/*'><p class=muted>Usada no comprovante e etiqueta.</p><button style='width:100%'>SALVAR</button></form>")
 
 @app.route("/teste")
 def teste():
-    C=conf(); largura=largura_impressao_mm(C)
-    texto=(f"BRECHÓ GETRES\\nTESTE DE IMPRESSÃO\\n"
-           f"Método: {C.get('impressora','android')}\\n"
-           f"Papel: {C.get('largura_papel','58')} mm\\n"
-           f"Modelo: {C.get('impressora_nome','')}\\n"
-           f"ABCDEFGHIJKLMNOPQRSTUVWXYZ\\n0123456789\\n"
-           f"Se este texto saiu completo, a largura está correta.")
-    botoes=botoes_impressao(texto)
-    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name=viewport content='width=device-width'>
-    <style>
-    @page{{size:{largura}mm auto;margin:0}}
-    *{{box-sizing:border-box}}
-    body{{width:{largura}mm;max-width:{largura}mm;margin:0 auto;padding:2mm;text-align:center;font:12px monospace;color:#000;background:#fff}}
-    button{{width:100%;padding:12px;margin:4px 0;font-weight:bold}}.acoes-impressao{{margin-top:8px}}
-    @media print{{.acoes-impressao{{display:none!important}}body{{padding:1mm}}}}
-    </style></head><body>
-    <h2>BRECHÓ GETRES</h2>
-    <p>TESTE TÉRMICO {C.get('largura_papel','58')} mm</p>
-    <p>Método: {C.get('impressora','android')}</p>
-    <p>{C.get('impressora_nome','')}</p>
-    <p>------------------------------</p>
-    <p>ABCDEFGHIJKLMNOPQRSTUVWXYZ<br>0123456789</p>
-    <p>Se tudo sair completo,<br>a largura está correta.</p>
-    {botoes}</body></html>"""
+    return """<!doctype html><meta name=viewport content='width=device-width'><style>body{width:54mm;margin:auto;text-align:center;font:12px monospace;color:#000;background:#fff}button{width:100%;padding:12px}@media print{button{display:none}}</style><h2>BRECHÓ GETRES</h2><p>TESTE 58 mm<br>RawBT / KA-1445</p><p>------------------------------</p><p>Se tudo sair completo,<br>a largura está correta.</p><button onclick=print()>IMPRIMIR</button>"""
 
-
-@app.route("/versao")
-def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-12-PWA-INSTALAVEL","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
-
-@app.route("/status-banco")
-def status_banco():
-    c=db()
-    p=c.execute("SELECT COUNT(*) n FROM produtos").fetchone()["n"]
-    v=c.execute("SELECT COUNT(*) n FROM vendas").fetchone()["n"]
-    f=c.execute("SELECT COUNT(*) n FROM fotos").fetchone()["n"]
-    fv=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NOT NULL AND octet_length(dados)>0").fetchone()["n"]
-    fq=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NULL OR octet_length(dados)=0").fetchone()["n"]
-    c.close()
-    return {"ok":True,"backend":"postgresql/supabase","persistente":True,"produtos":int(p),"vendas":int(v),"fotos":int(f),"fotos_validas":int(fv),"fotos_quebradas":int(fq)}
-
-
-# Ícones PWA oficiais do BRECHÓ GETRES (embutidos para funcionar no Render sem arquivos extras)
-PWA_ICON_192_B64 = "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"
-PWA_ICON_512_B64 = "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"
-
-@app.route("/pwa-icon-192.png")
-def pwa_icon_192():
-    return Response(base64.b64decode(PWA_ICON_192_B64), mimetype="image/png",
-                    headers={"Cache-Control":"public, max-age=604800"})
-
-@app.route("/pwa-icon-512.png")
-def pwa_icon_512():
-    return Response(base64.b64decode(PWA_ICON_512_B64), mimetype="image/png",
-                    headers={"Cache-Control":"public, max-age=604800"})
-
-@app.route("/favicon.png")
-def favicon_getres():
-    return Response(base64.b64decode(PWA_ICON_192_B64), mimetype="image/png",
-                    headers={"Cache-Control":"public, max-age=604800"})
 
 @app.route("/manifest.json")
 def manifest():
-    data={
-        "id":"/",
-        "name":"BRECHÓ GETRES",
-        "short_name":"GETRES",
-        "description":"Brechó Getres - blusas de times nacionais e internacionais",
-        "start_url":"/?source=pwa",
-        "scope":"/",
-        "display":"standalone",
-        "display_override":["standalone","minimal-ui"],
-        "orientation":"portrait",
-        "background_color":"#000000",
-        "theme_color":"#000000",
-        "icons":[
-            {"src":"/pwa-icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
-            {"src":"/pwa-icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
-            {"src":"/pwa-icon-192.png","sizes":"192x192","type":"image/png","purpose":"maskable"},
-            {"src":"/pwa-icon-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
-        ]
-    }
-    return Response(json.dumps(data,ensure_ascii=False),mimetype="application/manifest+json",
-                    headers={"Cache-Control":"no-store, no-cache, must-revalidate"})
+    return {"name":"Brechó Getres","short_name":"GETRES","start_url":"/","display":"standalone",
+            "background_color":"#080808","theme_color":"#080808"}
 
 @app.route("/service-worker.js")
 def service_worker():
     from flask import Response
-    js=r"""
-const CACHE='getres-final-v30-pwa-installavel';
-const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos','/manifest.json','/pwa-icon-192.png','/pwa-icon-512.png','/favicon.png'];
-
-self.addEventListener('install',e=>{
-  e.waitUntil((async()=>{
-    const c=await caches.open(CACHE);
-    for(const url of OFFLINE_PAGES){
-      try{
-        const r=await fetch(url,{cache:'no-store'});
-        if(r && r.ok) await c.put(url,r.clone());
-      }catch(_){}
-    }
-    await self.skipWaiting();
-  })());
-});
-
-self.addEventListener('activate',e=>{
-  e.waitUntil(
-    caches.keys()
-      .then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k))))
-      .then(()=>self.clients.claim())
-  );
-});
-
-function pedidosOfflineHtml(){
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Pedidos - BRECHÓ GETRES</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
-main{width:min(100%,560px);margin:auto;padding:20px 18px 80px}.brand{text-align:center;color:#e7a92d;font-weight:900;font-size:25px;margin:16px 0 24px}
-h1{font-size:28px}.box{border:1px solid #8a6422;border-radius:16px;padding:16px;margin:12px 0;background:#111;color:#fff;text-decoration:none;display:block}
-.row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.muted{color:#bbb;font-size:14px;margin-top:5px}
-.price{color:#e7a92d;font-size:20px;font-weight:900}.btn{display:inline-block;border:0;border-radius:11px;padding:14px 17px;background:#efad29;color:#111;font-weight:900;text-decoration:none}
-.danger{width:100%;margin-top:12px;border:0;border-radius:10px;padding:12px;background:#8b2025;color:#fff;font-weight:800}
-.net{padding:10px 14px;text-align:center;background:#7a1f1f;font-size:13px;font-weight:800}
-.notice{border-color:#2f8f46}
-</style></head><body>
-<div class="net" id="net"></div>
-<main><div class="brand">♧ BRECHÓ GETRES</div><a class="btn" href="/?menu=1">← VOLTAR</a>
-<h1>Pedidos</h1><div id="lista"></div></main>
-<script>
-function get(k,d){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(d))}catch(e){return d}}
-function set(k,v){localStorage.setItem(k,JSON.stringify(v))}
-function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function render(){
- const fila=get('getres_offline_sales',[]);
- let hist=get('getres_offline_history',[]);
- const acoes=get('getres_offline_actions',[]);
- const srv=get('getres_server_orders',[]);
- fila.forEach(p=>{if(!hist.some(x=>x.offline_id===p.offline_id))hist.unshift({...p,local_status:'PENDENTE'})});
- set('getres_offline_history',hist.slice(0,100));
- document.getElementById('net').textContent='OFFLINE • '+fila.length+' pedido(s) aguardando sincronização';
-
- const idsPend=new Set(fila.map(x=>x.offline_id));
- const offline=hist.filter(x=>idsPend.has(x.offline_id)||x.local_status==='PENDENTE');
- const avisos=acoes.map(a=>`<div class="box notice"><b>${a.tipo==='confirmar'?'✅ Pagamento confirmado offline':'❌ Cancelamento salvo offline'} • Venda #${a.vid}</b><div class="muted">Será sincronizado automaticamente quando a internet voltar.</div></div>`).join('');
-
- const offHtml=offline.map(p=>{
-   const total=Number(p.total||0);
-   return `<div class="box"><div class="row"><div><b>📴 Pedido offline</b><div class="muted">⏳ AGUARDANDO SINCRONIZAÇÃO</div><div class="muted">${esc(p.pagamento||'')}</div></div><div class="price">R$ ${total.toFixed(2).replace('.',',')}</div></div>
-   <button class="danger" data-off="${esc(p.offline_id||'')}">🗑️ EXCLUIR PEDIDO OFFLINE</button></div>`;
- }).join('');
-
- const srvHtml=srv.map(v=>{
-   const st=v.status||'AGUARDANDO_PAGAMENTO';
-   const rotulo=st==='PAGO'?'✅ PAGO':st==='CANCELADO'?'❌ CANCELADO':'⏳ AGUARDANDO PAGAMENTO';
-   return `<button class="box" style="width:100%;text-align:left" data-venda="${Number(v.id)}"><div class="row"><div><b>Venda #${Number(v.id)}</b><div class="muted">${rotulo}</div></div><div>R$ ${Number(v.total||0).toFixed(2)}</div></div></button>`;
- }).join('');
-
- document.getElementById('lista').innerHTML=avisos+offHtml+srvHtml || '<div class="box">Nenhum pedido salvo.</div>';
- document.querySelectorAll('[data-off]').forEach(b=>b.onclick=()=>{
-   if(!confirm('Excluir este pedido offline antes da sincronização?'))return;
-   const id=b.getAttribute('data-off');
-   set('getres_offline_sales',get('getres_offline_sales',[]).filter(x=>x.offline_id!==id));
-   set('getres_offline_history',get('getres_offline_history',[]).filter(x=>x.offline_id!==id));
-   render();
- });
- document.querySelectorAll('[data-venda]').forEach(b=>b.onclick=()=>abrirVenda(Number(b.getAttribute('data-venda'))));
-}
-function abrirVenda(vid){
- const srv=get('getres_server_orders',[]);
- const v=srv.find(x=>Number(x.id)===Number(vid));
- if(!v){alert('Os dados desta venda ainda não estão salvos neste aparelho.');return}
- const st=v.status||'AGUARDANDO_PAGAMENTO';
- const rotulo=st==='PAGO'?'✅ PAGO':st==='CANCELADO'?'❌ CANCELADO':'⏳ AGUARDANDO PAGAMENTO';
- const pode=st!=='PAGO'&&st!=='CANCELADO';
- const total=Number(v.total||0).toFixed(2).replace('.',',');
- document.querySelector('main').innerHTML=`<div class="brand">♧ BRECHÓ GETRES</div>
- <button class="btn" id="voltaPedidos">← PEDIDOS</button><h1>Venda #${vid}</h1>
- <div class="box"><div class="price">R$ ${total}</div><div class="muted">Status: ${rotulo}</div>
- <div class="muted">Pagamento: ${esc(v.pagamento||'')}</div>
- <div class="muted">Recebimento: ${v.tipo_entrega==='entrega'?'Entrega':'Retirada no local'}</div></div>
- ${v.pagamento==='PIX'&&pode?'<div class="box" style="text-align:center"><b>💠 PIX QR CODE</b><div class="muted">O QR Code completo requer internet. O valor e a confirmação continuam disponíveis offline.</div></div>':''}
- ${pode?'<button class="btn" id="confirmaVenda">✅ CONFIRMAR PAGAMENTO OFFLINE</button><button class="danger" id="cancelaVenda">❌ CANCELAR PEDIDO OFFLINE</button>':''}
- ${st==='PAGO'?'<div class="box notice"><b>✅ PAGAMENTO CONFIRMADO</b></div>':''}`;
- document.getElementById('voltaPedidos').onclick=()=>location.reload();
- if(pode){
-   document.getElementById('confirmaVenda').onclick=()=>filaAcao('confirmar',vid);
-   document.getElementById('cancelaVenda').onclick=()=>filaAcao('cancelar',vid);
- }
-}
-function filaAcao(tipo,vid){
- const msg=tipo==='confirmar'?'Confirmar o pagamento desta venda?':'Cancelar esta venda?';
- if(!confirm(msg))return;
- let a=get('getres_offline_actions',[]);
- a=a.filter(x=>Number(x.vid)!==Number(vid));
- a.push({tipo:tipo,vid:Number(vid),criado_em:new Date().toISOString()});
- set('getres_offline_actions',a);
- let srv=get('getres_server_orders',[]);
- srv=srv.map(v=>Number(v.id)===Number(vid)?({...v,status:tipo==='confirmar'?'PAGO':'CANCELADO'}):v);
- set('getres_server_orders',srv);
- alert(tipo==='confirmar'?'Pagamento confirmado OFFLINE. Será sincronizado quando a internet voltar.':'Cancelamento salvo OFFLINE. Será sincronizado quando a internet voltar.');
- location.reload();
-}
-render();
-</script></body></html>`;
-}
-
-function vendaOfflineHtml(vid){
-  return `<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Venda #${vid}</title>
-<style>
-*{box-sizing:border-box}body{margin:0;background:#000;color:#fff;font-family:Arial,sans-serif}
-main{width:min(100%,560px);margin:auto;padding:20px 18px 80px}.brand{text-align:center;color:#e7a92d;font-weight:900;font-size:25px;margin:16px 0 24px}
-.box{border:1px solid #8a6422;border-radius:16px;padding:18px;margin:14px 0;background:#111}.muted{color:#bbb;margin-top:7px}
-.price{color:#e7a92d;font-size:24px;font-weight:900}.btn,button{width:100%;border:0;border-radius:11px;padding:14px 17px;background:#efad29;color:#111;font-weight:900;text-decoration:none;display:block;text-align:center;margin-top:12px}
-.danger{background:#8b2025;color:#fff}.net{padding:10px;text-align:center;background:#7a1f1f;font-size:13px;font-weight:800}
-</style></head><body><div class="net">📴 Sem conexão</div><main>
-<div class="brand">♧ BRECHÓ GETRES</div><a class="btn" href="/pedidos">← PEDIDOS</a>
-<div id="conteudo"></div></main>
-<script>
-const vid=${vid};
-function get(k,d){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(d))}catch(e){return d}}
-function set(k,v){localStorage.setItem(k,JSON.stringify(v))}
-const srv=get('getres_server_orders',[]);
-const v=srv.find(x=>Number(x.id)===Number(vid));
-if(!v){
- document.getElementById('conteudo').innerHTML='<div class="box"><b>Venda #'+vid+'</b><div class="muted">Os detalhes desta venda não estavam salvos neste aparelho.</div></div>';
-}else{
- const st=v.status||'AGUARDANDO_PAGAMENTO';
- let botoes='';
- if(st!=='PAGO'&&st!=='CANCELADO'){
-   botoes='<button id="confirmar">✅ CONFIRMAR PAGAMENTO OFFLINE</button><button class="danger" id="cancelar">❌ CANCELAR OFFLINE</button>';
- }
- document.getElementById('conteudo').innerHTML='<h1>Venda #'+vid+'</h1><div class="box"><div class="price">R$ '+Number(v.total||0).toFixed(2).replace('.',',')+'</div><div class="muted">Status: '+st+'</div><div class="muted">Pagamento: '+(v.pagamento||'')+'</div></div>'+botoes;
- const q=(tipo)=>{let a=get('getres_offline_actions',[]);if(!a.some(x=>x.tipo===tipo&&Number(x.vid)===vid))a.push({tipo:tipo,vid:vid,criado_em:new Date().toISOString()});set('getres_offline_actions',a);location='/pedidos'};
- const bc=document.getElementById('confirmar');if(bc)bc.onclick=()=>{if(confirm('Confirmar o pagamento desta venda?'))q('confirmar')};
- const bx=document.getElementById('cancelar');if(bx)bx.onclick=()=>{if(confirm('Cancelar esta venda?'))q('cancelar')};
-}
-</script></body></html>`;
-}
-
-self.addEventListener('fetch',e=>{
-  const req=e.request;
-  if(req.method!=='GET') return;
-  const url=new URL(req.url);
-  if(url.origin!==self.location.origin) return;
-
-  if(req.mode==='navigate'){
-    e.respondWith((async()=>{
-      const c=await caches.open(CACHE);
-      const key=(['/destaques','/produtos','/carrinho','/pedidos'].includes(url.pathname))
-        ? url.pathname : (url.pathname==='/'?'/?menu=1':url.pathname+(url.search||''));
-
-      try{
-        const r=await fetch(req,{cache:'no-store'});
-        if(r && r.ok) await c.put(key,r.clone());
-        return r;
-      }catch(_){
-        if(url.pathname==='/pedidos'){
-          return new Response(pedidosOfflineHtml(),{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
-        }
-        const mv=url.pathname.match(/^\/venda\/(\d+)$/);
-        if(mv){
-          return new Response(vendaOfflineHtml(Number(mv[1])),{status:200,headers:{'Content-Type':'text/html; charset=utf-8'}});
-        }
-        const hit=await c.match(key);
-        if(hit) return hit;
-        return new Response(
-          '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Sem conexão</h2><p>Esta tela ainda não está disponível offline neste aparelho.</p><button onclick="history.back()" style="padding:14px">VOLTAR</button></body>',
-          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
-        );
-      }
-    })());
-    return;
-  }
-
-  if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
-    e.respondWith((async()=>{
-      const c=await caches.open(CACHE);
-      try{
-        const r=await fetch(req,{cache:'no-store'});
-        if(r.ok) await c.put(req,r.clone());
-        return r;
-      }catch(_){
-        const hit=await c.match(req);
-        return hit || Response.error();
-      }
-    })());
-  }
-});
+    js="""const C='brecho-getres-6-fotos-logo-v4';
+self.addEventListener('install',e=>e.waitUntil(caches.open(C).then(c=>c.addAll(['/','/produtos','/carrinho','/pedidos','/estatisticas','/menu','/config']))));
+self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(fetch(e.request).then(r=>{let x=r.clone();caches.open(C).then(c=>c.put(e.request,x));return r}).catch(()=>caches.match(e.request)))});
 """
     resp=Response(js,mimetype="application/javascript")
     resp.headers["Cache-Control"]="no-store, no-cache, must-revalidate, max-age=0"
@@ -1995,4 +708,3 @@ migrar_nome_getres()
 if __name__=="__main__":
     print("BRECHÓ GETRES: http://127.0.0.1:5000")
     app.run(host="0.0.0.0",port=5000,debug=False)
-
