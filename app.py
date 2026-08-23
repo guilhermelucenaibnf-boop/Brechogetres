@@ -1,8 +1,9 @@
-# BRECHÓ GETRES — APP ÚNICO FINAL — SUPABASE + OFFLINE + FOTOS + ESTOQUE + IMPRESSÃO MULTIMODO + PERFORMANCE
+# BRECHÓ GETRES — FINAL V16 — FOTO DIRETA + POOL SUPABASE + NAVEGAÇÃO RÁPIDA
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 from datetime import datetime
 from urllib.parse import quote_plus
 from flask import Flask, request, redirect, session, render_template_string, Response, send_file, abort, g
@@ -96,6 +97,20 @@ class PGCursor:
     def fetchall(self): return self.cur.fetchall()
     def __iter__(self): return iter(self.cur)
 
+_PG_POOL=None
+
+def _pool():
+    global _PG_POOL
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL do Supabase não está configurada no Render.")
+    if _PG_POOL is None:
+        _PG_POOL=ThreadedConnectionPool(
+            1,6,DATABASE_URL,
+            sslmode=os.environ.get("PGSSLMODE","require"),
+            connect_timeout=8
+        )
+    return _PG_POOL
+
 class PGConn:
     def __init__(self, raw): self.raw=raw
     def execute(self, sql, params=()):
@@ -110,12 +125,23 @@ class PGConn:
         return PGCursor(cur,last)
     def commit(self): self.raw.commit()
     def rollback(self): self.raw.rollback()
-    def close(self): self.raw.close()
+    def close(self):
+        try: _pool().putconn(self.raw)
+        except Exception:
+            try:self.raw.close()
+            except Exception:pass
 
 def db():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL do Supabase não está configurada no Render.")
-    return PGConn(psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require")))
+    p=_pool()
+    raw=p.getconn()
+    try:
+        with raw.cursor() as cur: cur.execute("SELECT 1")
+        return PGConn(raw)
+    except Exception:
+        try:p.putconn(raw,close=True)
+        except Exception:pass
+        raw=psycopg2.connect(DATABASE_URL,sslmode=os.environ.get("PGSSLMODE","require"),connect_timeout=8)
+        return PGConn(raw)
 
 def init():
     c=db()
@@ -123,7 +149,8 @@ def init():
         id BIGSERIAL PRIMARY KEY,
         nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,
         preco DOUBLE PRECISION,estoque INTEGER,imagem TEXT,descricao TEXT,
-        ativo INTEGER DEFAULT 1,offline_id TEXT
+        ativo INTEGER DEFAULT 1,offline_id TEXT,
+        imagem_dados BYTEA,imagem_mime TEXT
     )""")
     c.execute("CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT)")
     c.execute("""CREATE TABLE IF NOT EXISTS fotos(
@@ -140,6 +167,8 @@ def init():
     for sql in [
         "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo INTEGER DEFAULT 1",
         "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS offline_id TEXT",
+        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_dados BYTEA",
+        "ALTER TABLE produtos ADD COLUMN IF NOT EXISTS imagem_mime TEXT",
         "ALTER TABLE fotos ADD COLUMN IF NOT EXISTS dados BYTEA",
         "ALTER TABLE fotos ADD COLUMN IF NOT EXISTS mime TEXT",
         "ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'retirada'",
@@ -202,9 +231,13 @@ def reparar_fotos_produto(c, produto_id=None):
         if principal:
             c.execute("UPDATE fotos SET principal=CASE WHEN id=? THEN 1 ELSE 0 END WHERE produto_id=?",
                       (principal["id"],pid))
-            c.execute("UPDATE produtos SET imagem=? WHERE id=?",(principal["arquivo"],pid))
+            fd=c.execute("SELECT dados,mime FROM fotos WHERE id=?",(principal["id"],)).fetchone()
+            c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
+                      (principal["arquivo"],
+                       psycopg2.Binary(bytes(fd["dados"])) if fd and fd.get("dados") is not None else None,
+                       (fd.get("mime") if fd else None) or "image/jpeg",pid))
         else:
-            c.execute("UPDATE produtos SET imagem='' WHERE id=?",(pid,))
+            c.execute("UPDATE produtos SET imagem='',imagem_dados=NULL,imagem_mime=NULL WHERE id=?",(pid,))
 
 def logo_data_uri():
     """Retorna a logo persistida no Supabase em data URI."""
@@ -286,6 +319,23 @@ def foto_arquivo(arquivo):
     c=db(); r=c.execute("SELECT dados,mime FROM fotos WHERE arquivo=? AND dados IS NOT NULL ORDER BY principal DESC,id DESC LIMIT 1",(arquivo,)).fetchone(); c.close()
     if not r or r.get("dados") is None: abort(404)
     return Response(bytes(r["dados"]),mimetype=r.get("mime") or "image/jpeg",headers={"Cache-Control":"public, max-age=31536000, immutable"})
+
+@app.route("/produto-foto/<int:pid>")
+def produto_foto(pid):
+    c=db()
+    r=c.execute("SELECT imagem_dados,imagem_mime FROM produtos WHERE id=?",(pid,)).fetchone()
+    if not r or r.get("imagem_dados") is None:
+        r=c.execute("""SELECT dados AS imagem_dados,mime AS imagem_mime FROM fotos
+                     WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0
+                     ORDER BY principal DESC,id DESC LIMIT 1""",(pid,)).fetchone()
+        if r and r.get("imagem_dados") is not None:
+            c.execute("UPDATE produtos SET imagem_dados=?,imagem_mime=? WHERE id=?",
+                      (psycopg2.Binary(bytes(r["imagem_dados"])),r.get("imagem_mime") or "image/jpeg",pid))
+            c.commit()
+    c.close()
+    if not r or r.get("imagem_dados") is None: abort(404)
+    return Response(bytes(r["imagem_dados"]),mimetype=r.get("imagem_mime") or "image/jpeg",
+                    headers={"Cache-Control":"public, max-age=86400"})
 
 def page(title,body,nav=True):
     C=conf()
@@ -409,16 +459,15 @@ try{{document.getElementById('homeBadge').textContent=JSON.parse(localStorage.g3
 @app.route("/destaques")
 def destaques():
     c=db(); rows=c.execute("""SELECT p.*,
-        COALESCE(NULLIF(p.imagem,''),(
-            SELECT f.arquivo FROM fotos f
-            WHERE f.produto_id=p.id AND f.dados IS NOT NULL AND octet_length(f.dados)>0
-            ORDER BY f.principal DESC,f.id DESC LIMIT 1
-        )) AS imagem_efetiva
+        (p.imagem_dados IS NOT NULL OR EXISTS(
+          SELECT 1 FROM fotos f WHERE f.produto_id=p.id
+          AND f.dados IS NOT NULL AND octet_length(f.dados)>0
+        )) AS tem_foto
         FROM produtos p WHERE COALESCE(p.ativo,1)=1 ORDER BY p.id DESC""").fetchall(); c.close()
     cards=""
     for r in rows:
-        img_nome=r.get("imagem_efetiva") or r.get("imagem") or ""
-        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/foto-arquivo/"+img_nome+"' alt='Ver fotos'></a>") if img_nome else "<div class=pic>👕</div>"
+        tem_foto=bool(r.get("tem_foto"))
+        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/produto-foto/"+str(r["id"])+"' alt='Ver fotos'></a>") if tem_foto else "<div class=pic>👕</div>"
         cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
     if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
     offline_js=r"""
@@ -485,18 +534,17 @@ def destaques():
 @app.route("/produtos")
 def produtos():
     c=db(); rows=c.execute("""SELECT p.*,
-        COALESCE(NULLIF(p.imagem,''),(
-            SELECT f.arquivo FROM fotos f
-            WHERE f.produto_id=p.id AND f.dados IS NOT NULL AND octet_length(f.dados)>0
-            ORDER BY f.principal DESC,f.id DESC LIMIT 1
-        )) AS imagem_efetiva
+        (p.imagem_dados IS NOT NULL OR EXISTS(
+          SELECT 1 FROM fotos f WHERE f.produto_id=p.id
+          AND f.dados IS NOT NULL AND octet_length(f.dados)>0
+        )) AS tem_foto
         FROM produtos p ORDER BY p.id DESC""").fetchall(); c.close()
     x="<div class=row><h2>Produtos</h2><a class=btn href='/novo'>＋ ADICIONAR</a></div>"
     if not rows:
         x+="<div class=box>Nenhuma blusa cadastrada.</div>"
     for r in rows:
-        img_nome=r.get("imagem_efetiva") or r.get("imagem") or ""
-        foto=f"<img class=prod-thumb src='/foto-arquivo/{img_nome}'>" if img_nome else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
+        tem_foto=bool(r.get("tem_foto"))
+        foto=f"<img class=prod-thumb src='/produto-foto/{r['id']}'>" if tem_foto else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
         x+=f"""<div class=box>
         <div class=prod-info>{foto}<div><b style='font-size:29px;line-height:1.2;font-weight:900'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
         <div class=prod-actions>
@@ -588,7 +636,8 @@ def produto_form(pid=None):
                 c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
                 for i,(arq,dados,mime) in enumerate(novos_dados[:vagas]):
                     c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(produto_id,arq,1 if i==0 else 0,psycopg2.Binary(dados),mime))
-                c.execute("UPDATE produtos SET imagem=? WHERE id=?",(novos_dados[0][0],produto_id))
+                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
+                          (novos_dados[0][0],psycopg2.Binary(novos_dados[0][1]),novos_dados[0][2],produto_id))
         c.commit();c.close();return redirect("/produtos")
     out=page("Produto",form_prod(r));c.close();return out
 
@@ -677,7 +726,9 @@ def fotos(pid):
             if not dados: continue
             tem=c.execute("SELECT 1 FROM fotos WHERE produto_id=?",(pid,)).fetchone(); principal=0 if tem else 1
             c.execute("INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",(pid,arq,principal,psycopg2.Binary(dados),mime))
-            if principal: c.execute("UPDATE produtos SET imagem=? WHERE id=?",(arq,pid))
+            if principal:
+                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
+                          (arq,psycopg2.Binary(dados),mime,pid))
         c.commit(); c.close(); return redirect("/fotos/"+str(pid))
     rows=c.execute("SELECT id,produto_id,arquivo,principal FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 ORDER BY principal DESC,id DESC",(pid,)).fetchall(); c.close()
     cards=""
@@ -701,10 +752,12 @@ def fotos(pid):
 @app.route("/foto-principal/<int:pid>/<int:fid>")
 def foto_principal(pid,fid):
     c=db(); c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(pid,))
-    f=c.execute("SELECT arquivo FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
+    f=c.execute("SELECT arquivo,dados,mime FROM fotos WHERE id=? AND produto_id=?",(fid,pid)).fetchone()
     if f:
         c.execute("UPDATE fotos SET principal=1 WHERE id=?",(fid,))
-        c.execute("UPDATE produtos SET imagem=? WHERE id=?",(f["arquivo"],pid))
+        c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
+                  (f["arquivo"],psycopg2.Binary(bytes(f["dados"])) if f.get("dados") is not None else None,
+                   f.get("mime") or "image/jpeg",pid))
     c.commit();c.close();return redirect("/fotos/"+str(pid))
 
 @app.route("/foto-excluir/<int:pid>/<int:fid>")
@@ -715,8 +768,13 @@ def foto_excluir(pid,fid):
         if f["principal"]:
             n=c.execute("SELECT id,arquivo FROM fotos WHERE produto_id=? ORDER BY id DESC LIMIT 1",(pid,)).fetchone()
             if n:
-                c.execute("UPDATE fotos SET principal=1 WHERE id=?",(n["id"],));c.execute("UPDATE produtos SET imagem=? WHERE id=?",(n["arquivo"],pid))
-            else: c.execute("UPDATE produtos SET imagem='' WHERE id=?",(pid,))
+                c.execute("UPDATE fotos SET principal=1 WHERE id=?",(n["id"],))
+                nd=c.execute("SELECT dados,mime FROM fotos WHERE id=?",(n["id"],)).fetchone()
+                c.execute("UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
+                          (n["arquivo"],psycopg2.Binary(bytes(nd["dados"])) if nd and nd.get("dados") is not None else None,
+                           (nd.get("mime") if nd else None) or "image/jpeg",pid))
+            else:
+                c.execute("UPDATE produtos SET imagem='',imagem_dados=NULL,imagem_mime=NULL WHERE id=?",(pid,))
     c.commit();c.close();return redirect("/fotos/"+str(pid))
 
 @app.route("/etiqueta/<int:pid>")
@@ -1247,31 +1305,9 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v15-performance-fotos';
-const ROUTES=[
-  '/?menu=1',
-  '/destaques',
-  '/produtos',
-  '/novo',
-  '/carrinho',
-  '/pedidos',
-  '/estatisticas',
-  '/config',
-  '/offline/catalogo'
-];
+const CACHE='getres-final-v16-rapido-foto-direta';
 
-self.addEventListener('install',e=>{
-  e.waitUntil((async()=>{
-    const c=await caches.open(CACHE);
-    for(const u of ROUTES){
-      try{
-        const r=await fetch(u,{cache:'no-store'});
-        if(r.ok) await c.put(u,r.clone());
-      }catch(_){}
-    }
-    await self.skipWaiting();
-  })());
-});
+self.addEventListener('install',e=>{e.waitUntil(self.skipWaiting())});
 
 self.addEventListener('activate',e=>{
   e.waitUntil(
@@ -1284,55 +1320,44 @@ self.addEventListener('activate',e=>{
 self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
-
   const url=new URL(req.url);
   if(url.origin!==self.location.origin) return;
 
-  if(req.mode==='navigate'){
+  if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
     e.respondWith((async()=>{
+      const c=await caches.open(CACHE);
+      const hit=await c.match(req);
+      if(hit) return hit;
       try{
-        const fresh=await fetch(req);
-        if(fresh && fresh.ok){
-          const c=await caches.open(CACHE);
-          await c.put(url.pathname+(url.search||''),fresh.clone());
-        }
-        return fresh;
-      }catch(err){
-        const c=await caches.open(CACHE);
-
-        let hit=await c.match(url.pathname+(url.search||''),{ignoreSearch:false});
-        if(hit) return hit;
-
-        hit=await c.match(url.pathname,{ignoreSearch:true});
-        if(hit) return hit;
-
-        // Nunca cai em "/" puro, pois "/" exibe a tela "Entrar na loja".
-        hit=await c.match('/?menu=1',{ignoreSearch:false});
-        if(hit) return hit;
-
-        return new Response(
-          '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Brechó Getres</h2><p>Esta página ainda não foi carregada para uso offline. Conecte à internet uma vez e abra esta aba.</p></body>',
-          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
-        );
-      }
+        const r=await fetch(req);
+        if(r.ok) await c.put(req,r.clone());
+        return r;
+      }catch(_){return hit || Response.error()}
     })());
     return;
   }
 
-  e.respondWith((async()=>{
-    const cached=await caches.match(req);
-    if(cached) return cached;
-    try{
-      const fresh=await fetch(req);
-      if(fresh && fresh.ok){
-        const c=await caches.open(CACHE);
-        await c.put(req,fresh.clone());
+  if(req.mode==='navigate'){
+    e.respondWith((async()=>{
+      const c=await caches.open(CACHE);
+      const key=url.pathname+(url.search||'');
+      const cached=await c.match(key);
+      try{
+        const controller=new AbortController();
+        const timer=setTimeout(()=>controller.abort(),2500);
+        const r=await fetch(req,{signal:controller.signal});
+        clearTimeout(timer);
+        if(r && r.ok) await c.put(key,r.clone());
+        return r;
+      }catch(_){
+        if(cached) return cached;
+        const home=await c.match('/?menu=1');
+        if(home) return home;
+        return new Response('<h2>Sem conexão</h2><p>Abra novamente quando houver internet.</p>',
+          {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}});
       }
-      return fresh;
-    }catch(err){
-      return new Response('',{status:503});
-    }
-  })());
+    })());
+  }
 });
 """
     resp=Response(js,mimetype="application/javascript")
