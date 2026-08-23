@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V28 — CONTADOR DE SINCRONIZAÇÃO OFFLINE
+# BRECHÓ GETRES — FINAL V29 — RESET DE ESTATÍSTICAS DE TESTE
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -182,7 +182,7 @@ def init():
     ]: c.execute(sql)
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_vendas_offline_id ON vendas(offline_id) WHERE offline_id IS NOT NULL")
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_produtos_offline_id ON produtos(offline_id) WHERE offline_id IS NOT NULL")
-    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"android","largura_papel":"58","impressora_nome":"","impressora_ip":"","impressora_porta":"9100","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
+    for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"android","largura_papel":"58","impressora_nome":"","impressora_ip":"","impressora_porta":"9100","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":"","estatisticas_inicio":""}.items():
         c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO NOTHING",(k,v))
     c.execute("DELETE FROM fotos WHERE dados IS NULL OR octet_length(dados)=0")
     c.execute("""UPDATE produtos p SET imagem=COALESCE((
@@ -1531,48 +1531,70 @@ def menu():
 
 @app.route("/estatisticas")
 def estatisticas():
+    C=conf()
+    inicio=str(C.get("estatisticas_inicio","") or "").strip()
+
     c=db()
-    pagos=c.execute("SELECT * FROM vendas WHERE status='PAGO' ORDER BY id DESC").fetchall()
-    ativos=c.execute("SELECT COUNT(*) n FROM vendas WHERE COALESCE(status,'AGUARDANDO_PAGAMENTO') IN ('ATIVO','AGUARDANDO_PAGAMENTO')").fetchone()["n"]
-    cancelados=c.execute("SELECT COUNT(*) n FROM vendas WHERE status='CANCELADO'").fetchone()["n"]
-    agora=datetime.now(); hoje=agora.strftime("%Y-%m-%d"); mes=agora.strftime("%Y-%m")
-    fat=sum(float(v["total"] or 0) for v in pagos)
-    fat_hoje=sum(float(v["total"] or 0) for v in pagos if str(v["data"] or "").startswith(hoje))
-    fat_mes=sum(float(v["total"] or 0) for v in pagos if str(v["data"] or "").startswith(mes))
-    ticket=fat/len(pagos) if pagos else 0
-    formas={}; vendidos={}; unidades=0
-    for v in pagos:
-        pg=(v["pagamento"] or "Não informado").strip()
-        formas[pg]=formas.get(pg,0)+float(v["total"] or 0)
-        try: itens=json.loads(v["itens"] or "[]")
-        except Exception: itens=[]
-        for item in itens:
-            nome=item.get("nome") or "Produto"
-            vendidos[nome]=vendidos.get(nome,0)+1; unidades+=1
-    top=sorted(vendidos.items(),key=lambda x:(-x[1],x[0].lower()))[:5]
-    produtos=c.execute("SELECT nome,estoque FROM produtos ORDER BY estoque ASC,nome").fetchall()
-    estoque_total=sum(int(p["estoque"] or 0) for p in produtos)
-    sem=[p["nome"] for p in produtos if int(p["estoque"] or 0)<=0]
+    params=()
+    where=""
+    if inicio:
+        where=" WHERE data>=?"
+        params=(inicio,)
+
+    vendas=int(c.execute("SELECT COUNT(*) n FROM vendas"+where,params).fetchone()["n"] or 0)
+    pagos=int(c.execute("SELECT COUNT(*) n FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='PAGO'",params).fetchone()["n"] or 0)
+    cancelados=int(c.execute("SELECT COUNT(*) n FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='CANCELADO'",params).fetchone()["n"] or 0)
+    faturamento=float(c.execute("SELECT COALESCE(SUM(total),0) s FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='PAGO'",params).fetchone()["s"] or 0)
+    ticket=(faturamento/pagos) if pagos else 0.0
+
+    rows=c.execute("SELECT itens FROM vendas"+(" WHERE " if not where else where+" AND ")+"status='PAGO'",params).fetchall()
+    unidades=0
+    for r in rows:
+        try: unidades+=len(json.loads(r["itens"] or "[]"))
+        except Exception: pass
+
+    estoque=int(c.execute("SELECT COALESCE(SUM(estoque),0) s FROM produtos WHERE COALESCE(ativo,1)=1").fetchone()["s"] or 0)
     c.close()
-    moeda=lambda v:("R$ %.2f"%v).replace(".",",")
-    formas_html="".join(f"<div class='box row' style='display:flex'><b>{k}</b><span>{moeda(v)}</span></div>" for k,v in sorted(formas.items())) or "<div class=box>Nenhum pagamento confirmado ainda.</div>"
-    top_html="".join(f"<div class='box row' style='display:flex'><b>{n}</b><span>{q} un.</span></div>" for n,q in top) or "<div class=box>Nenhum produto vendido ainda.</div>"
-    sem_html="".join(f"<div class=box>⚠️ {n}</div>" for n in sem) or "<div class=box>✅ Nenhum produto sem estoque.</div>"
+
+    periodo=(f"<div class=muted>Período iniciado em: {inicio.replace('T',' ')}</div>" if inicio else "<div class=muted>Período: todo o histórico</div>")
+
     body=f"""<h2>📊 Estatísticas</h2>
+    <div class=box>{periodo}</div>
     <div class=grid>
-    <div class=box><div class=muted>💰 Faturamento total</div><div class=price>{moeda(fat)}</div><small>Somente pedidos PAGOS</small></div>
-    <div class=box><div class=muted>📅 Vendas de hoje</div><div class=price>{moeda(fat_hoje)}</div></div>
-    <div class=box><div class=muted>🗓️ Vendas do mês</div><div class=price>{moeda(fat_mes)}</div></div>
-    <div class=box><div class=muted>🎫 Ticket médio</div><div class=price>{moeda(ticket)}</div></div>
-    <div class=box><b>✅ Pedidos pagos</b><div class=price>{len(pagos)}</div></div>
-    <div class=box><b>⏳ Aguardando pagamento</b><div class=price>{ativos}</div></div>
-    <div class=box><b>❌ Pedidos cancelados</b><div class=price>{cancelados}</div></div>
-    <div class=box><b>👕 Unidades vendidas</b><div class=price>{unidades}</div></div>
-    <div class=box><b>📦 Estoque atual</b><div class=price>{estoque_total}</div></div></div>
-    <h3>💳 Faturamento por pagamento</h3>{formas_html}
-    <h3>🏆 Produtos mais vendidos</h3>{top_html}
-    <h3>⚠️ Produtos sem estoque</h3>{sem_html}"""
+      <div class=box><b>Vendas</b><div class=price>{vendas}</div></div>
+      <div class=box><b>Pagas</b><div class=price>{pagos}</div></div>
+      <div class=box><b>Canceladas</b><div class=price>{cancelados}</div></div>
+      <div class=box><b>Unidades vendidas</b><div class=price>{unidades}</div></div>
+      <div class=box><b>Faturamento</b><div class=price>R$ {faturamento:.2f}</div></div>
+      <div class=box><b>Ticket médio</b><div class=price>R$ {ticket:.2f}</div></div>
+      <div class=box><b>Estoque atual</b><div class=price>{estoque}</div></div>
+    </div>
+    <div class=box style='margin-top:18px'>
+      <h3>🧹 Dados de teste</h3>
+      <p class=muted>Use este botão para zerar apenas a visualização das estatísticas. Pedidos, vendas, produtos, fotos, estoque e configurações não são apagados.</p>
+      <form method=post action='/reset-estatisticas' onsubmit="return confirm('Zerar as estatísticas a partir de agora? O histórico de vendas será mantido.')">
+        <button class=danger style='width:100%'>🧹 ZERAR ESTATÍSTICAS DE TESTE</button>
+      </form>
+    </div>"""
     return page("Estatísticas",body)
+
+
+@app.route("/reset-estatisticas",methods=["POST"])
+def reset_estatisticas():
+    agora=datetime.now().isoformat(timespec="seconds")
+    c=db()
+    c.execute("INSERT INTO config(chave,valor) VALUES('estatisticas_inicio',?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(agora,))
+    c.commit();c.close()
+    return redirect("/estatisticas")
+
+
+@app.route("/restaurar-estatisticas",methods=["POST"])
+def restaurar_estatisticas():
+    c=db()
+    c.execute("INSERT INTO config(chave,valor) VALUES('estatisticas_inicio','') ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor")
+    c.commit();c.close()
+    return redirect("/estatisticas")
+
 
 @app.route("/config",methods=["GET","POST"])
 def config():
@@ -1676,7 +1698,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-10-CONTADOR-SYNC","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-11-RESET-ESTATISTICAS","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1698,7 +1720,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v28-contador-sync';
+const CACHE='getres-final-v29-reset-estatisticas';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
