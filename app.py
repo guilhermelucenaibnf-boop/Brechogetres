@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V19 — ADICIONAR FOTOS NÃO VOLTA AO MENU
+# BRECHÓ GETRES — FINAL V20 — CARRINHO E PEDIDOS FUNCIONAM OFFLINE
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -1000,7 +1000,7 @@ function salvarOffline(){
   localStorage.removeItem('g3cart');
   showNetStatus();
   alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
-  location='/pedidos?offline=1';
+  location='/pedidos';
 }
 async function fechar(){
   if(!ids.length || !window.d || !window.d.length || subtotal<=0){alert('Carrinho vazio. Adicione pelo menos uma blusa antes de finalizar.');return}
@@ -1419,7 +1419,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-2-NAVEGACAO","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-3-OFFLINE-CARRINHO-PEDIDOS","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1441,10 +1441,22 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v19-navegacao-correta';
+const CACHE='getres-final-v20-offline-carrinho-pedidos';
+const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
-  e.waitUntil(self.skipWaiting());
+  e.waitUntil((async()=>{
+    const c=await caches.open(CACHE);
+    // Tenta salvar as telas essenciais enquanto há internet.
+    // Se alguma falhar, a instalação continua normalmente.
+    for(const url of OFFLINE_PAGES){
+      try{
+        const r=await fetch(url,{cache:'no-store'});
+        if(r && r.ok) await c.put(url,r.clone());
+      }catch(_){}
+    }
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener('activate',e=>{
@@ -1455,6 +1467,16 @@ self.addEventListener('activate',e=>{
   );
 });
 
+function chavePagina(url){
+  // Para telas principais, ignora query-string.
+  // Assim /pedidos?offline=1 usa o mesmo cache de /pedidos.
+  if(['/destaques','/produtos','/carrinho','/pedidos'].includes(url.pathname)){
+    return url.pathname;
+  }
+  if(url.pathname==='/') return '/?menu=1';
+  return url.pathname+(url.search||'');
+}
+
 self.addEventListener('fetch',e=>{
   const req=e.request;
   if(req.method!=='GET') return;
@@ -1462,22 +1484,27 @@ self.addEventListener('fetch',e=>{
   const url=new URL(req.url);
   if(url.origin!==self.location.origin) return;
 
-  // NAVEGAÇÃO:
-  // nunca troca /fotos, /produtos, /carrinho etc. pelo menu principal.
-  // Aguarda a página real quando há rede; usa somente a MESMA página em cache se ficar offline.
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
-      const key=url.pathname+(url.search||'');
+      const key=chavePagina(url);
+
+      // Online: rede primeiro e atualiza o cache daquela mesma tela.
       try{
         const r=await fetch(req,{cache:'no-store'});
         if(r && r.ok) await c.put(key,r.clone());
         return r;
       }catch(_){
+        // Offline: usa a mesma tela pré-carregada.
         const mesmaPagina=await c.match(key);
         if(mesmaPagina) return mesmaPagina;
+
+        // Segunda tentativa: algumas páginas podem ter sido guardadas com URL exata.
+        const exata=await c.match(req);
+        if(exata) return exata;
+
         return new Response(
-          '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Sem conexão</h2><p>Esta tela ainda não foi aberta neste aparelho enquanto estava online.</p><button onclick="history.back()" style="padding:14px">VOLTAR</button></body>',
+          '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><body style="background:#000;color:#fff;font-family:Arial;padding:24px"><h2>Sem conexão</h2><p>Esta tela ainda não está disponível offline neste aparelho.</p><button onclick="history.back()" style="padding:14px">VOLTAR</button></body>',
           {status:503,headers:{'Content-Type':'text/html; charset=utf-8'}}
         );
       }
@@ -1485,8 +1512,7 @@ self.addEventListener('fetch',e=>{
     return;
   }
 
-  // Fotos: rede primeiro para a foto nova aparecer imediatamente;
-  // cache apenas como alternativa offline.
+  // Fotos: rede primeiro para mostrar alterações recentes; cache como alternativa offline.
   if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
