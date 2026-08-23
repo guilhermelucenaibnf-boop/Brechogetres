@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V25 — ESTOQUE OFFLINE SINCRONIZADO CORRETAMENTE
+# BRECHÓ GETRES — FINAL V26 — PEDIDOS OFFLINE DIRETO DO CELULAR
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -394,6 +394,84 @@ function saveOfflineHistory(sale,status,serverId,erro){
   if(i>=0)h[i]=item;else h.unshift(item);
   setOfflineHistory(h.slice(0,100));
 }
+
+function abrirPedidosOfflineLocal(){
+  const q=getOfflineQueue();
+  const h=getOfflineHistory();
+  const acoes=getOfflineActions();
+  const pedidosServidor=(()=>{try{return JSON.parse(localStorage.getItem("getres_server_orders")||"[]")}catch(e){return []}})();
+
+  const esc=v=>String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+  const idsPend=new Set(q.map(x=>x.offline_id));
+  const pendentes=q.map(p=>({...p,local_status:"PENDENTE"}));
+  const histPend=h.filter(p=>p.local_status==="PENDENTE" && !idsPend.has(p.offline_id));
+  const locais=[...pendentes,...histPend];
+
+  const overlay=document.createElement("div");
+  overlay.id="pedidosOfflineOverlay";
+  overlay.style.cssText="position:fixed;inset:0;z-index:1000000;background:#000;color:#fff;overflow:auto;font-family:Arial,sans-serif";
+  overlay.innerHTML=`<div style="background:#7a1f1f;padding:9px 14px;text-align:center;font-size:13px;font-weight:800">
+    📴 OFFLINE • ${q.length} pedido(s) aguardando sincronização
+  </div>
+  <div style="width:min(100%,560px);margin:auto;padding:24px 18px 80px">
+    <div style="text-align:center;color:#e7a92d;font-size:25px;font-weight:900;margin-bottom:26px">♧ BRECHÓ GETRES</div>
+    <button id="fecharPedidosOffline" style="border:1px solid #8a6422;background:#171717;color:#e7a92d;border-radius:12px;padding:13px 18px;font-weight:900">← VOLTAR</button>
+    <h1 style="font-size:28px;margin:28px 0 18px">Pedidos</h1>
+    <div id="listaPedidosOfflineLocal"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById("fecharPedidosOffline").onclick=()=>overlay.remove();
+
+  const lista=document.getElementById("listaPedidosOfflineLocal");
+  let html="";
+
+  for(const p of locais){
+    const total=Number(p.total || ((p.itens||[]).reduce((a,x)=>a+Number(x.preco||0),0)+Number(p.taxa_entrega||0)));
+    html+=`<div style="border:1px solid #a87920;border-radius:16px;padding:16px;margin:12px 0;background:#111">
+      <div style="display:flex;justify-content:space-between;gap:12px">
+        <div><b>📴 Pedido offline</b>
+          <div style="color:#bbb;font-size:14px;margin-top:5px">⏳ AGUARDANDO SINCRONIZAÇÃO</div>
+          <div style="color:#bbb;font-size:14px;margin-top:5px">Pagamento: ${esc(p.pagamento||"")}</div>
+        </div>
+        <b style="color:#e7a92d">R$ ${total.toFixed(2).replace(".",",")}</b>
+      </div>
+    </div>`;
+  }
+
+  for(const a of acoes){
+    html+=`<div style="border:1px solid #2f8f46;border-radius:16px;padding:16px;margin:12px 0;background:#111">
+      <b>${a.tipo==="confirmar"?"✅ Pagamento confirmado offline":"❌ Cancelamento salvo offline"} • Venda #${Number(a.vid)}</b>
+      <div style="color:#bbb;font-size:14px;margin-top:5px">Será sincronizado quando a internet voltar.</div>
+    </div>`;
+  }
+
+  for(const v of pedidosServidor){
+    const st=v.status||"AGUARDANDO_PAGAMENTO";
+    const rotulo=st==="PAGO"?"✅ PAGO":st==="CANCELADO"?"❌ CANCELADO":"⏳ AGUARDANDO PAGAMENTO";
+    html+=`<div style="border:1px solid #8a6422;border-radius:16px;padding:16px;margin:12px 0;background:#111">
+      <div style="display:flex;justify-content:space-between;gap:12px">
+        <div><b>Venda #${Number(v.id)}</b><div style="color:#bbb;font-size:14px;margin-top:5px">${rotulo}</div></div>
+        <span>R$ ${Number(v.total||0).toFixed(2)}</span>
+      </div>
+    </div>`;
+  }
+
+  lista.innerHTML=html || `<div style="border:1px solid #8a6422;border-radius:16px;padding:16px;background:#111">Nenhum pedido salvo neste aparelho.</div>`;
+}
+
+document.addEventListener("click",function(ev){
+  if(navigator.onLine)return;
+  const a=ev.target.closest && ev.target.closest("a[href]");
+  if(!a)return;
+  try{
+    const u=new URL(a.href,location.origin);
+    if(u.origin===location.origin && u.pathname==="/pedidos"){
+      ev.preventDefault();
+      abrirPedidosOfflineLocal();
+    }
+  }catch(e){}
+},true);
+
 function showNetStatus(){
   const el=document.getElementById("netStatus"); if(!el)return;
   const q=getOfflineQueue();
@@ -1048,7 +1126,8 @@ function salvarOffline(transactionId){
   localStorage.removeItem('g3cart');
   showNetStatus();
   alert('Pedido salvo OFFLINE. Ele já aparece em Pedidos e será sincronizado automaticamente quando a internet voltar.');
-  location='/pedidos';
+  if(typeof abrirPedidosOfflineLocal==='function')abrirPedidosOfflineLocal();
+  else location='/pedidos';
 }
 let finalizandoVenda=false;
 async function fechar(){
@@ -1524,7 +1603,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-7-OFFLINE-ESTOQUE-SYNC","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-8-PEDIDOS-OFFLINE-LOCAL","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1546,7 +1625,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v25-offline-estoque-sync';
+const CACHE='getres-final-v26-pedidos-offline-local';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
