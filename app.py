@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V18 — CORREÇÃO DIRETA DO UPLOAD DE FOTOS NO APP ATUAL
+# BRECHÓ GETRES — FINAL FIX ÚNICO — FOTOS + VELOCIDADE — 2026-08-23
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -312,7 +312,7 @@ def logo_getres():
     if not uri: abort(404)
     try:
         cab,b64=uri.split(",",1); mime=cab.split(";",1)[0].split(":",1)[1]
-        return Response(base64.b64decode(b64),mimetype=mime,headers={"Cache-Control":"public, max-age=86400"})
+        return Response(base64.b64decode(b64),mimetype=mime,headers={"Cache-Control":"no-store, no-cache, must-revalidate"})
     except Exception:
         abort(404)
 
@@ -469,7 +469,7 @@ def destaques():
     cards=""
     for r in rows:
         tem_foto=bool(r.get("tem_foto"))
-        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/produto-foto/"+str(r["id"])+"' alt='Ver fotos'></a>") if tem_foto else "<div class=pic>👕</div>"
+        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/produto-foto/"+str(r["id"])+"?v="+str(int(datetime.now().timestamp()))+"' alt='Ver fotos'></a>") if tem_foto else "<div class=pic>👕</div>"
         cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
     if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
     offline_js=r"""
@@ -724,20 +724,18 @@ def api_upload_fotos(pid):
             c.close()
             return {"ok":False,"erro":"Produto não encontrado."},404
 
-        reparar_fotos_produto(c,pid)
         existentes=int(c.execute(
             "SELECT COUNT(*) n FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0",
             (pid,)
         ).fetchone()["n"] or 0)
         vagas=max(0,6-existentes)
-
         if vagas<=0:
-            c.commit(); c.close()
-            return {"ok":False,"erro":"Limite de 6 fotos atingido."},400
+            c.close()
+            return {"ok":False,"erro":"Este produto já possui 6 fotos."},400
 
         recebidas=[f for f in request.files.getlist("fotos") if f and f.filename]
         if not recebidas:
-            c.rollback(); c.close()
+            c.close()
             return {"ok":False,"erro":"Nenhuma imagem chegou ao servidor."},400
 
         salvas=0
@@ -750,18 +748,12 @@ def api_upload_fotos(pid):
                 mime="image/jpeg"
             ext=".png" if mime=="image/png" else ".webp" if mime=="image/webp" else ".jpg"
             arq=secrets.token_hex(12)+ext
-
-            tem=c.execute(
-                "SELECT 1 FROM fotos WHERE produto_id=? AND dados IS NOT NULL AND octet_length(dados)>0 LIMIT 1",
-                (pid,)
-            ).fetchone()
-            principal=0 if tem else 1
+            principal=1 if existentes+salvas==0 else 0
 
             c.execute(
                 "INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",
                 (pid,arq,principal,psycopg2.Binary(dados),mime)
             )
-
             if principal:
                 c.execute(
                     "UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
@@ -818,7 +810,7 @@ def fotos(pid):
       </div>
       <div id=selecionadas class=muted style='padding:16px 4px;text-align:center'>Nenhuma nova foto selecionada.</div>
       <div id=uploadStatus class=muted style='padding:8px 4px;text-align:center'></div>
-      <p class=muted>Até 6 fotos. O app reduz o tamanho antes de enviar para o Supabase.</p>
+      <p class=muted>Até 6 fotos. O app reduz o tamanho antes do envio para acelerar o salvamento.</p>
       <button id=salvarFotos type=button style='width:100%' disabled>💾 SALVAR FOTOS</button>
     </div>
     <div class=grid>{cards or '<div class=box>Nenhuma foto adicional.</div>'}</div>
@@ -838,7 +830,6 @@ def fotos(pid):
         : 'Nenhuma nova foto selecionada.';
       salvar.disabled=!escolhidas.length;
     }}
-
     cam.addEventListener('change',()=>selecionar(cam));
     gal.addEventListener('change',()=>selecionar(gal));
 
@@ -872,19 +863,15 @@ def fotos(pid):
           const blob=await comprimir(escolhidas[i]);
           fd.append('fotos',blob,'foto_'+(i+1)+'.jpg');
         }}
-
         statusEl.textContent='Enviando para o Supabase...';
         const r=await fetch('/api/upload-fotos/{pid}',{{method:'POST',body:fd,cache:'no-store'}});
         let d={{}};
         try{{d=await r.json()}}catch(e){{}}
         if(!r.ok||!d.ok)throw new Error(d.erro||('Erro HTTP '+r.status));
-
-        statusEl.textContent='✅ '+d.salvas+' foto(s) salva(s).';
+        statusEl.textContent='✅ '+d.salvas+' foto(s) salva(s) com sucesso.';
         localStorage.removeItem('getres_catalogo');
-        if('caches' in window){{
-          try{{for(const k of await caches.keys())await caches.delete(k)}}catch(e){{}}
-        }}
-        setTimeout(()=>location='/produtos',700);
+        if('caches' in window){{try{{for(const k of await caches.keys())await caches.delete(k)}}catch(e){{}}}}
+        setTimeout(()=>location='/destaques?foto='+Date.now(),700);
       }}catch(e){{
         statusEl.textContent='❌ '+e.message;
         salvar.disabled=false;
@@ -1430,6 +1417,10 @@ def teste():
     {botoes}</body></html>"""
 
 
+@app.route("/versao")
+def versao():
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-1","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+
 @app.route("/status-banco")
 def status_banco():
     c=db()
@@ -1438,13 +1429,8 @@ def status_banco():
     f=c.execute("SELECT COUNT(*) n FROM fotos").fetchone()["n"]
     fv=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NOT NULL AND octet_length(dados)>0").fetchone()["n"]
     fq=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NULL OR octet_length(dados)=0").fetchone()["n"]
-    pf=c.execute("SELECT COUNT(*) n FROM produtos WHERE imagem_dados IS NOT NULL AND octet_length(imagem_dados)>0").fetchone()["n"]
     c.close()
-    return {"ok":True,"backend":"postgresql/supabase","persistente":True,
-            "produtos":int(p),"vendas":int(v),"fotos":int(f),
-            "fotos_validas":int(fv),"fotos_quebradas":int(fq),
-            "produtos_com_foto":int(pf)}
-
+    return {"ok":True,"backend":"postgresql/supabase","persistente":True,"produtos":int(p),"vendas":int(v),"fotos":int(f),"fotos_validas":int(fv),"fotos_quebradas":int(fq)}
 
 @app.route("/manifest.json")
 def manifest():
