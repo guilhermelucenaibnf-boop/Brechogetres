@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V26 — PEDIDOS OFFLINE DIRETO DO CELULAR
+# BRECHÓ GETRES — FINAL V27 — VENDA SINCRONIZADA ABRE OFFLINE
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -448,15 +448,88 @@ function abrirPedidosOfflineLocal(){
   for(const v of pedidosServidor){
     const st=v.status||"AGUARDANDO_PAGAMENTO";
     const rotulo=st==="PAGO"?"✅ PAGO":st==="CANCELADO"?"❌ CANCELADO":"⏳ AGUARDANDO PAGAMENTO";
-    html+=`<div style="border:1px solid #8a6422;border-radius:16px;padding:16px;margin:12px 0;background:#111">
+    html+=`<button data-venda-local="${Number(v.id)}" style="width:100%;color:#fff;text-align:left;border:1px solid #8a6422;border-radius:16px;padding:16px;margin:12px 0;background:#111">
       <div style="display:flex;justify-content:space-between;gap:12px">
         <div><b>Venda #${Number(v.id)}</b><div style="color:#bbb;font-size:14px;margin-top:5px">${rotulo}</div></div>
         <span>R$ ${Number(v.total||0).toFixed(2)}</span>
       </div>
-    </div>`;
+    </button>`;
   }
 
   lista.innerHTML=html || `<div style="border:1px solid #8a6422;border-radius:16px;padding:16px;background:#111">Nenhum pedido salvo neste aparelho.</div>`;
+  lista.querySelectorAll("[data-venda-local]").forEach(btn=>{
+    btn.onclick=()=>abrirVendaOfflineLocal(Number(btn.getAttribute("data-venda-local")));
+  });
+}
+
+function abrirVendaOfflineLocal(vid){
+  const pedidosServidor=(()=>{try{return JSON.parse(localStorage.getItem("getres_server_orders")||"[]")}catch(e){return []}})();
+  const v=pedidosServidor.find(x=>Number(x.id)===Number(vid));
+  if(!v){alert("Os dados desta venda não estão salvos neste aparelho.");return}
+
+  const overlay=document.getElementById("pedidosOfflineOverlay");
+  if(!overlay)return;
+  const st=v.status||"AGUARDANDO_PAGAMENTO";
+  const rotulo=st==="PAGO"?"✅ PAGO":st==="CANCELADO"?"❌ CANCELADO":"⏳ AGUARDANDO PAGAMENTO";
+  const pode=st!=="PAGO"&&st!=="CANCELADO";
+  const recebe=v.tipo_entrega==="entrega"?"Entrega":"Retirada no local";
+
+  overlay.innerHTML=`<div style="background:#7a1f1f;padding:9px 14px;text-align:center;font-size:13px;font-weight:800">
+    📴 OFFLINE
+  </div>
+  <div style="width:min(100%,560px);margin:auto;padding:24px 18px 80px">
+    <div style="text-align:center;color:#e7a92d;font-size:25px;font-weight:900;margin-bottom:26px">♧ BRECHÓ GETRES</div>
+    <button id="voltarListaOffline" style="border:1px solid #8a6422;background:#171717;color:#e7a92d;border-radius:12px;padding:13px 18px;font-weight:900">← PEDIDOS</button>
+    <h1 style="font-size:28px;margin:28px 0 18px">Venda #${vid}</h1>
+
+    <div style="border:1px solid #8a6422;border-radius:16px;padding:18px;background:#111">
+      <div style="font-size:24px;font-weight:900;color:#e7a92d">R$ ${Number(v.total||0).toFixed(2).replace(".",",")}</div>
+      <p><b>Status: ${rotulo}</b></p>
+      <p>Pagamento: ${String(v.pagamento||"")}</p>
+      <p>Recebimento: ${recebe}</p>
+    </div>
+
+    ${v.pagamento==="PIX"&&pode?`<div style="border:1px solid #8a6422;border-radius:16px;padding:18px;background:#111;text-align:center;margin-top:14px">
+      <h3>💠 PIX QR CODE</h3>
+      <p>Valor: <b>R$ ${Number(v.total||0).toFixed(2).replace(".",",")}</b></p>
+      <p style="color:#bbb;font-size:14px">O QR Code completo precisa de internet, mas a confirmação pode ser registrada offline.</p>
+    </div>`:""}
+
+    ${pode?`
+      <button id="confirmarVendaOfflineLocal" style="width:100%;border:0;border-radius:11px;padding:15px;background:#efad29;color:#111;font-weight:900;margin-top:14px">✅ CONFIRMAR PAGAMENTO OFFLINE</button>
+      <button id="cancelarVendaOfflineLocal" style="width:100%;border:0;border-radius:11px;padding:15px;background:#8b2025;color:#fff;font-weight:900;margin-top:12px">❌ CANCELAR PEDIDO OFFLINE</button>
+    `:st==="PAGO"?`<div style="border:1px solid #2f8f46;border-radius:16px;padding:18px;background:#111;text-align:center;margin-top:14px"><b>✅ PAGAMENTO CONFIRMADO</b></div>`:
+      `<div style="border:1px solid #8b2727;border-radius:16px;padding:18px;background:#111;text-align:center;margin-top:14px"><b>❌ PEDIDO CANCELADO</b></div>`}
+  </div>`;
+
+  document.getElementById("voltarListaOffline").onclick=()=>{
+    overlay.remove();
+    abrirPedidosOfflineLocal();
+  };
+
+  const confirmar=document.getElementById("confirmarVendaOfflineLocal");
+  if(confirmar)confirmar.onclick=()=>{
+    if(!confirm("Confirmar o pagamento desta venda?"))return;
+    let a=getOfflineActions().filter(x=>Number(x.vid)!==Number(vid));
+    a.push({tipo:"confirmar",vid:Number(vid),criado_em:new Date().toISOString()});
+    setOfflineActions(a);
+    const atual=pedidosServidor.map(x=>Number(x.id)===Number(vid)?({...x,status:"PAGO"}):x);
+    localStorage.setItem("getres_server_orders",JSON.stringify(atual));
+    alert("Pagamento confirmado OFFLINE. Será sincronizado quando a internet voltar.");
+    overlay.remove();abrirPedidosOfflineLocal();
+  };
+
+  const cancelar=document.getElementById("cancelarVendaOfflineLocal");
+  if(cancelar)cancelar.onclick=()=>{
+    if(!confirm("Cancelar esta venda?"))return;
+    let a=getOfflineActions().filter(x=>Number(x.vid)!==Number(vid));
+    a.push({tipo:"cancelar",vid:Number(vid),criado_em:new Date().toISOString()});
+    setOfflineActions(a);
+    const atual=pedidosServidor.map(x=>Number(x.id)===Number(vid)?({...x,status:"CANCELADO"}):x);
+    localStorage.setItem("getres_server_orders",JSON.stringify(atual));
+    alert("Cancelamento salvo OFFLINE. Será sincronizado quando a internet voltar.");
+    overlay.remove();abrirPedidosOfflineLocal();
+  };
 }
 
 document.addEventListener("click",function(ev){
@@ -1603,7 +1676,7 @@ def teste():
 
 @app.route("/versao")
 def versao():
-    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-8-PEDIDOS-OFFLINE-LOCAL","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
+    return {"app":"BRECHO GETRES","versao":"FINAL-FIX-2026-08-23-9-ABRIR-VENDA-OFFLINE","foto_upload":"api_dedicada","backend":"postgresql/supabase"}
 
 @app.route("/status-banco")
 def status_banco():
@@ -1625,7 +1698,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v26-pedidos-offline-local';
+const CACHE='getres-final-v27-abrir-venda-offline';
 const OFFLINE_PAGES=['/?menu=1','/destaques','/produtos','/carrinho','/pedidos'];
 
 self.addEventListener('install',e=>{
