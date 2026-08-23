@@ -1,15 +1,13 @@
 # BRECHO G3 - instalador de versao inicial
 # Execute: python app.py
-import os, json, secrets, re, unicodedata, io, base64
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import os, sqlite3, json, secrets, re, unicodedata, io, base64
 from datetime import datetime
 from urllib.parse import quote_plus
 from flask import Flask, request, redirect, session, render_template_string
 
 app=Flask(__name__)
 app.secret_key=os.environ.get("SECRET_KEY","brecho-g3-2026")
-DATABASE_URL=os.environ.get("DATABASE_URL","").strip()
+DB="brechog3.db"
 os.makedirs("static/produtos",exist_ok=True)
 
 
@@ -77,47 +75,20 @@ CSS="""
 #splash{position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;justify-content:center;transition:opacity .55s}#splash.hide{opacity:0;pointer-events:none}.splash-inner{text-align:center;padding:28px}.splash-mark{font-size:110px;line-height:1;color:#e7a92d;text-shadow:0 0 28px rgba(231,169,45,.4)}.splash-g3{font-size:80px;font-weight:900;color:#e7a92d;line-height:.9;margin-top:-18px}.splash-name{font-size:39px;font-weight:900;color:#e7a92d;margin-top:30px}.splash-sub{font-size:15px;line-height:1.5;margin-top:12px;text-transform:uppercase}.loader{width:42px;height:42px;border:4px solid #3b2c10;border-top-color:#e7a92d;border-radius:50%;margin:55px auto 14px;animation:spin .85s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@media(max-width:480px){.logo{font-size:28px}.brandicon{font-size:34px}.sub{font-size:11px}main{padding:18px 12px 30px}.menu-card{min-height:148px;padding:20px 16px;gap:16px}.menu-icon{width:88px;flex-basis:88px;font-size:62px}.menu-title{font-size:29px}.menu-desc{font-size:17px}.menu-arrow{font-size:48px}.splash-mark{font-size:90px}.splash-g3{font-size:66px}.splash-name{font-size:33px}}
 """
 
-class PGConn:
-    def __init__(self, raw):
-        self.raw=raw
-    def execute(self, sql, params=()):
-        cur=self.raw.cursor(cursor_factory=RealDictCursor)
-        cur.execute(sql.replace("?", "%s"), params or ())
-        return cur
-    def commit(self):
-        self.raw.commit()
-    def rollback(self):
-        self.raw.rollback()
-    def close(self):
-        self.raw.close()
-
 def db():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL do Supabase não está configurada no Render.")
-    return PGConn(psycopg2.connect(DATABASE_URL, sslmode=os.environ.get("PGSSLMODE","require")))
+    c=sqlite3.connect(DB); c.row_factory=sqlite3.Row; return c
 
 def init():
     c=db()
-    c.execute("""CREATE TABLE IF NOT EXISTS produtos(
-        id BIGSERIAL PRIMARY KEY,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,
-        estado TEXT,preco DOUBLE PRECISION,estoque INTEGER,imagem TEXT,descricao TEXT,ativo INTEGER DEFAULT 1
-    )""")
-    c.execute("CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT)")
-    c.execute("""CREATE TABLE IF NOT EXISTS fotos(
-        id BIGSERIAL PRIMARY KEY,produto_id BIGINT,arquivo TEXT,principal INTEGER DEFAULT 0
-    )""")
-    c.execute("""CREATE TABLE IF NOT EXISTS vendas(
-        id BIGSERIAL PRIMARY KEY,data TEXT,total DOUBLE PRECISION,pagamento TEXT,itens TEXT,
-        tipo_entrega TEXT DEFAULT 'retirada',taxa_entrega DOUBLE PRECISION DEFAULT 0,
-        status TEXT DEFAULT 'ATIVO',estoque_devolvido INTEGER DEFAULT 0
-    )""")
-    c.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS tipo_entrega TEXT DEFAULT 'retirada'")
-    c.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS taxa_entrega DOUBLE PRECISION DEFAULT 0")
-    c.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ATIVO'")
-    c.execute("ALTER TABLE vendas ADD COLUMN IF NOT EXISTS estoque_devolvido INTEGER DEFAULT 0")
-    c.execute("ALTER TABLE produtos ADD COLUMN IF NOT EXISTS ativo INTEGER DEFAULT 1")
+    c.executescript("""CREATE TABLE IF NOT EXISTS produtos(id INTEGER PRIMARY KEY AUTOINCREMENT,nome TEXT,time_nome TEXT,categoria TEXT,tamanho TEXT,estado TEXT,preco REAL,estoque INTEGER,imagem TEXT,descricao TEXT);
+CREATE TABLE IF NOT EXISTS config(chave TEXT PRIMARY KEY,valor TEXT);
+CREATE TABLE IF NOT EXISTS fotos(id INTEGER PRIMARY KEY AUTOINCREMENT,produto_id INTEGER,arquivo TEXT,principal INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS vendas(id INTEGER PRIMARY KEY AUTOINCREMENT,data TEXT,total REAL,pagamento TEXT,itens TEXT);""")
+    for sql in ["ALTER TABLE vendas ADD COLUMN tipo_entrega TEXT DEFAULT 'retirada'","ALTER TABLE vendas ADD COLUMN taxa_entrega REAL DEFAULT 0","ALTER TABLE vendas ADD COLUMN status TEXT DEFAULT 'ATIVO'","ALTER TABLE vendas ADD COLUMN estoque_devolvido INTEGER DEFAULT 0","ALTER TABLE produtos ADD COLUMN ativo INTEGER DEFAULT 1"]:
+        try: c.execute(sql)
+        except sqlite3.OperationalError: pass
     for k,v in {"nome":"BRECHÓ GETRES","slogan":"Blusas de times nacionais e internacionais","pix":"","whatsapp":"5521976723047","cnpj":"","endereco":"","mensagem":"Obrigado pela preferência!","impressora":"RawBT / 58 mm","cidade_pix":"RIO DE JANEIRO","taxa_entrega":"10.00","logo":""}.items():
-        c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO NOTHING",(k,v))
+        c.execute("INSERT OR IGNORE INTO config VALUES(?,?)",(k,v))
     c.commit(); c.close()
 
 def migrar_nome_getres():
@@ -284,8 +255,8 @@ def produto_form(pid=None):
             c.execute("UPDATE produtos SET nome=?,time_nome=?,categoria=?,tamanho=?,estado=?,preco=?,estoque=?,imagem=?,descricao=? WHERE id=?",vals+(pid,))
             produto_id=pid
         else:
-            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?) RETURNING id",vals)
-            produto_id=int(cur.fetchone()["id"])
+            cur=c.execute("INSERT INTO produtos(nome,time_nome,categoria,tamanho,estado,preco,estoque,imagem,descricao) VALUES(?,?,?,?,?,?,?,?,?)",vals)
+            produto_id=cur.lastrowid
         if arquivos_novos:
             c.execute("UPDATE fotos SET principal=0 WHERE produto_id=?",(produto_id,))
             existentes=c.execute("SELECT COUNT(*) n FROM fotos WHERE produto_id=?",(produto_id,)).fetchone()["n"]
@@ -537,8 +508,8 @@ def vender():
         try: taxa=float(str(conf().get("taxa_entrega","0")).replace(",","."))
         except: taxa=0
     total+=taxa
-    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?) RETURNING id",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
-    vid=int(cur.fetchone()["id"]);c.commit();c.close();return {"ok":True,"id":vid}
+    cur=c.execute("INSERT INTO vendas(data,total,pagamento,itens,tipo_entrega,taxa_entrega,status,estoque_devolvido) VALUES(?,?,?,?,?,?,?,?)",(datetime.now().isoformat(timespec="minutes"),total,d.get("pagamento","PIX"),json.dumps(it,ensure_ascii=False),tipo_entrega,taxa,"AGUARDANDO_PAGAMENTO",0))
+    vid=cur.lastrowid;c.commit();c.close();return {"ok":True,"id":vid}
 
 @app.route("/venda/<int:vid>")
 def venda(vid):
@@ -701,11 +672,11 @@ def config():
     if request.method=="POST":
         c=db()
         for k in ["nome","slogan","pix","cidade_pix","whatsapp","cnpj","endereco","mensagem","impressora","taxa_entrega"]:
-            c.execute("INSERT INTO config(chave,valor) VALUES(?,?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(k,request.form.get(k,"")))
+            c.execute("INSERT OR REPLACE INTO config VALUES(?,?)",(k,request.form.get(k,"")))
         logo=request.files.get("logo")
         if logo and logo.filename:
             ext=os.path.splitext(logo.filename)[1].lower() or ".png"; arq="logo_getres"+ext
-            logo.save("static/"+arq); c.execute("INSERT INTO config(chave,valor) VALUES('logo',?) ON CONFLICT(chave) DO UPDATE SET valor=EXCLUDED.valor",(arq,))
+            logo.save("static/"+arq); c.execute("INSERT OR REPLACE INTO config VALUES('logo',?)",(arq,))
         c.commit();c.close();return redirect("/config")
     C=conf();labels={"nome":"Nome da loja","slogan":"Slogan","pix":"Chave PIX","cidade_pix":"Cidade do PIX","whatsapp":"WhatsApp","cnpj":"CNPJ/CPF","endereco":"Endereço","mensagem":"Mensagem do comprovante","impressora":"Impressora","taxa_entrega":"Taxa de entrega (R$)"}
     fs="".join(f"<label>{labels[k]}</label><input name={k} value='{C[k]}'>" for k in labels)
