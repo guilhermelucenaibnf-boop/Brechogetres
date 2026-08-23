@@ -1,4 +1,4 @@
-# BRECHÓ GETRES — FINAL V17 — FOTO UPLOAD CORRIGIDO + SUPABASE + NAVEGAÇÃO OTIMIZADA
+# BRECHÓ GETRES — FINAL V18 — CORREÇÃO DIRETA DO UPLOAD DE FOTOS NO APP ATUAL
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
@@ -715,8 +715,8 @@ def galeria(pid):
     return page("Galeria",body)
 
 
-@app.route("/api/fotos/<int:pid>",methods=["POST"])
-def api_fotos(pid):
+@app.route("/api/upload-fotos/<int:pid>",methods=["POST"])
+def api_upload_fotos(pid):
     c=db()
     try:
         p=c.execute("SELECT id FROM produtos WHERE id=?",(pid,)).fetchone()
@@ -730,21 +730,20 @@ def api_fotos(pid):
             (pid,)
         ).fetchone()["n"] or 0)
         vagas=max(0,6-existentes)
+
         if vagas<=0:
             c.commit(); c.close()
-            return {"ok":False,"erro":"Este produto já possui 6 fotos."},400
+            return {"ok":False,"erro":"Limite de 6 fotos atingido."},400
 
-        fs=[f for f in request.files.getlist("fotos") if f and f.filename]
-        if not fs:
+        recebidas=[f for f in request.files.getlist("fotos") if f and f.filename]
+        if not recebidas:
             c.rollback(); c.close()
-            return {"ok":False,"erro":"Nenhuma foto foi recebida pelo servidor."},400
+            return {"ok":False,"erro":"Nenhuma imagem chegou ao servidor."},400
 
         salvas=0
-        for f in fs[:vagas]:
+        for f in recebidas[:vagas]:
             dados=f.read()
             if not dados:
-                continue
-            if len(dados)>8*1024*1024:
                 continue
             mime=(f.mimetype or "image/jpeg").lower()
             if mime not in ("image/jpeg","image/png","image/webp"):
@@ -762,6 +761,7 @@ def api_fotos(pid):
                 "INSERT INTO fotos(produto_id,arquivo,principal,dados,mime) VALUES(?,?,?,?,?)",
                 (pid,arq,principal,psycopg2.Binary(dados),mime)
             )
+
             if principal:
                 c.execute(
                     "UPDATE produtos SET imagem=?,imagem_dados=?,imagem_mime=? WHERE id=?",
@@ -771,7 +771,7 @@ def api_fotos(pid):
 
         if salvas==0:
             c.rollback(); c.close()
-            return {"ok":False,"erro":"A foto não pôde ser gravada. Tente outra imagem."},400
+            return {"ok":False,"erro":"A imagem foi recebida, mas não pôde ser gravada."},400
 
         c.commit(); c.close()
         return {"ok":True,"salvas":salvas}
@@ -818,8 +818,8 @@ def fotos(pid):
       </div>
       <div id=selecionadas class=muted style='padding:16px 4px;text-align:center'>Nenhuma nova foto selecionada.</div>
       <div id=uploadStatus class=muted style='padding:8px 4px;text-align:center'></div>
-      <p class=muted>Até 6 fotos por produto. As imagens são reduzidas automaticamente antes de enviar para acelerar o salvamento.</p>
-      <button id=adicionarFotos type=button style='width:100%' disabled>➕ SALVAR FOTOS</button>
+      <p class=muted>Até 6 fotos. O app reduz o tamanho antes de enviar para o Supabase.</p>
+      <button id=salvarFotos type=button style='width:100%' disabled>💾 SALVAR FOTOS</button>
     </div>
     <div class=grid>{cards or '<div class=box>Nenhuma foto adicional.</div>'}</div>
 
@@ -828,77 +828,67 @@ def fotos(pid):
     const gal=document.getElementById('galeriaFotos');
     const info=document.getElementById('selecionadas');
     const statusEl=document.getElementById('uploadStatus');
-    const botao=document.getElementById('adicionarFotos');
+    const salvar=document.getElementById('salvarFotos');
     let escolhidas=[];
 
-    function escolher(input){{
+    function selecionar(input){{
       escolhidas=[...(input.files||[])].slice(0,6);
-      if(escolhidas.length){{
-        info.textContent=escolhidas.length===1?'1 nova foto selecionada.':escolhidas.length+' novas fotos selecionadas.';
-        botao.disabled=false;
-      }}else{{
-        info.textContent='Nenhuma nova foto selecionada.';
-        botao.disabled=true;
-      }}
+      info.textContent=escolhidas.length
+        ? (escolhidas.length===1?'1 foto selecionada.':escolhidas.length+' fotos selecionadas.')
+        : 'Nenhuma nova foto selecionada.';
+      salvar.disabled=!escolhidas.length;
     }}
 
-    cam.addEventListener('change',()=>escolher(cam));
-    gal.addEventListener('change',()=>escolher(gal));
+    cam.addEventListener('change',()=>selecionar(cam));
+    gal.addEventListener('change',()=>selecionar(gal));
 
-    async function comprimirImagem(file){{
-      if(!file.type.startsWith('image/')) return file;
-      return new Promise((resolve)=>{{
-        const img=new Image();
-        const url=URL.createObjectURL(file);
+    function comprimir(file){{
+      return new Promise(resolve=>{{
+        if(!file.type.startsWith('image/')){{resolve(file);return}}
+        const img=new Image(), url=URL.createObjectURL(file);
         img.onload=()=>{{
-          let w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
-          const max=1600;
-          if(w>max || h>max){{
-            const s=Math.min(max/w,max/h); w=Math.round(w*s); h=Math.round(h*s);
-          }}
+          let w=img.naturalWidth||img.width,h=img.naturalHeight||img.height;
+          const max=1400;
+          if(w>max||h>max){{const s=Math.min(max/w,max/h);w=Math.round(w*s);h=Math.round(h*s)}}
           const canvas=document.createElement('canvas');
-          canvas.width=w; canvas.height=h;
+          canvas.width=w;canvas.height=h;
           canvas.getContext('2d').drawImage(img,0,0,w,h);
           URL.revokeObjectURL(url);
-          canvas.toBlob(blob=>{{
-            if(blob) resolve(new File([blob],'foto.jpg',{{type:'image/jpeg'}}));
-            else resolve(file);
-          }},'image/jpeg',0.82);
+          canvas.toBlob(blob=>resolve(blob||file),'image/jpeg',0.8);
         }};
         img.onerror=()=>{{URL.revokeObjectURL(url);resolve(file)}};
         img.src=url;
       }});
     }}
 
-    botao.addEventListener('click',async()=>{{
+    salvar.addEventListener('click',async()=>{{
       if(!escolhidas.length)return;
-      botao.disabled=true;
-      botao.textContent='SALVANDO...';
-      statusEl.textContent='Preparando fotos...';
+      salvar.disabled=true;
+      salvar.textContent='SALVANDO...';
       try{{
         const fd=new FormData();
         for(let i=0;i<escolhidas.length;i++){{
           statusEl.textContent='Preparando foto '+(i+1)+' de '+escolhidas.length+'...';
-          const f=await comprimirImagem(escolhidas[i]);
-          fd.append('fotos',f,'foto_'+(i+1)+'.jpg');
+          const blob=await comprimir(escolhidas[i]);
+          fd.append('fotos',blob,'foto_'+(i+1)+'.jpg');
         }}
+
         statusEl.textContent='Enviando para o Supabase...';
-        const r=await fetch('/api/fotos/{pid}',{{method:'POST',body:fd,cache:'no-store'}});
+        const r=await fetch('/api/upload-fotos/{pid}',{{method:'POST',body:fd,cache:'no-store'}});
         let d={{}};
         try{{d=await r.json()}}catch(e){{}}
-        if(!r.ok || !d.ok) throw new Error(d.erro||('Erro HTTP '+r.status));
-        statusEl.textContent='✅ '+d.salvas+' foto(s) salva(s) com sucesso.';
+        if(!r.ok||!d.ok)throw new Error(d.erro||('Erro HTTP '+r.status));
+
+        statusEl.textContent='✅ '+d.salvas+' foto(s) salva(s).';
+        localStorage.removeItem('getres_catalogo');
         if('caches' in window){{
-          try{{
-            const ks=await caches.keys();
-            for(const k of ks) await caches.delete(k);
-          }}catch(e){{}}
+          try{{for(const k of await caches.keys())await caches.delete(k)}}catch(e){{}}
         }}
-        setTimeout(()=>location.reload(),500);
+        setTimeout(()=>location='/produtos',700);
       }}catch(e){{
         statusEl.textContent='❌ '+e.message;
-        botao.disabled=false;
-        botao.textContent='➕ SALVAR FOTOS';
+        salvar.disabled=false;
+        salvar.textContent='💾 SALVAR FOTOS';
       }}
     }});
     </script>"""
@@ -1448,8 +1438,13 @@ def status_banco():
     f=c.execute("SELECT COUNT(*) n FROM fotos").fetchone()["n"]
     fv=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NOT NULL AND octet_length(dados)>0").fetchone()["n"]
     fq=c.execute("SELECT COUNT(*) n FROM fotos WHERE dados IS NULL OR octet_length(dados)=0").fetchone()["n"]
+    pf=c.execute("SELECT COUNT(*) n FROM produtos WHERE imagem_dados IS NOT NULL AND octet_length(imagem_dados)>0").fetchone()["n"]
     c.close()
-    return {"ok":True,"backend":"postgresql/supabase","persistente":True,"produtos":int(p),"vendas":int(v),"fotos":int(f),"fotos_validas":int(fv),"fotos_quebradas":int(fq)}
+    return {"ok":True,"backend":"postgresql/supabase","persistente":True,
+            "produtos":int(p),"vendas":int(v),"fotos":int(f),
+            "fotos_validas":int(fv),"fotos_quebradas":int(fq),
+            "produtos_com_foto":int(pf)}
+
 
 @app.route("/manifest.json")
 def manifest():
@@ -1460,9 +1455,10 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v17-fotos-upload-rapido';
+const CACHE='getres-final-v16-rapido-foto-direta';
 
 self.addEventListener('install',e=>{e.waitUntil(self.skipWaiting())});
+
 self.addEventListener('activate',e=>{
   e.waitUntil(
     caches.keys()
@@ -1480,14 +1476,13 @@ self.addEventListener('fetch',e=>{
   if(url.pathname.startsWith('/produto-foto/') || url.pathname.startsWith('/foto-arquivo/')){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
+      const hit=await c.match(req);
+      if(hit) return hit;
       try{
-        const r=await fetch(req,{cache:'no-store'});
+        const r=await fetch(req);
         if(r.ok) await c.put(req,r.clone());
         return r;
-      }catch(_){
-        const hit=await c.match(req);
-        return hit || Response.error();
-      }
+      }catch(_){return hit || Response.error()}
     })());
     return;
   }
@@ -1495,13 +1490,17 @@ self.addEventListener('fetch',e=>{
   if(req.mode==='navigate'){
     e.respondWith((async()=>{
       const c=await caches.open(CACHE);
+      const key=url.pathname+(url.search||'');
+      const cached=await c.match(key);
       try{
-        const r=await fetch(req,{cache:'no-store'});
-        if(r && r.ok) await c.put(req,r.clone());
+        const controller=new AbortController();
+        const timer=setTimeout(()=>controller.abort(),2500);
+        const r=await fetch(req,{signal:controller.signal});
+        clearTimeout(timer);
+        if(r && r.ok) await c.put(key,r.clone());
         return r;
       }catch(_){
-        const hit=await c.match(req);
-        if(hit) return hit;
+        if(cached) return cached;
         const home=await c.match('/?menu=1');
         if(home) return home;
         return new Response('<h2>Sem conexão</h2><p>Abra novamente quando houver internet.</p>',
