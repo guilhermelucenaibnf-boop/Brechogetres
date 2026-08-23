@@ -1,11 +1,11 @@
-# BRECHÓ GETRES — APP ÚNICO FINAL — SUPABASE + OFFLINE + FOTOS + ESTOQUE + IMPRESSÃO MULTIMODO
+# BRECHÓ GETRES — APP ÚNICO FINAL — SUPABASE + OFFLINE + FOTOS + ESTOQUE + IMPRESSÃO MULTIMODO + PERFORMANCE
 # Execute: python app.py
 import os, json, secrets, re, unicodedata, io, base64
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime
 from urllib.parse import quote_plus
-from flask import Flask, request, redirect, session, render_template_string, Response, send_file, abort
+from flask import Flask, request, redirect, session, render_template_string, Response, send_file, abort, g
 
 app=Flask(__name__)
 app.secret_key=os.environ.get("SECRET_KEY","brecho-g3-2026")
@@ -173,7 +173,14 @@ def migrar_nome_getres():
     c.close()
 
 def conf():
-    c=db(); d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}; c.close(); return d
+    # Cache por requisição: evita abrir várias conexões Supabase na mesma página.
+    if hasattr(g,"_getres_conf"):
+        return g._getres_conf
+    c=db()
+    d={x["chave"]:x["valor"] for x in c.execute("SELECT * FROM config")}
+    c.close()
+    g._getres_conf=d
+    return d
 
 def reparar_fotos_produto(c, produto_id=None):
     """Remove somente referências de fotos sem bytes e repara a foto principal."""
@@ -289,7 +296,7 @@ def page(title,body,nav=True):
     logo_uri=logo_data_uri()
     logo_header=(f"<img src='{logo_uri}' alt='Logo BRECHÓ GETRES' style='width:48px;height:48px;object-fit:contain;display:block'>" if logo_uri else "<span class=brandicon>♧</span>")
     return render_template_string("""<!doctype html><html lang=pt-br><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name=theme-color content="#000000"><link rel=manifest href="/manifest.json"><title>{{title}}</title><style>"""+CSS+"""</style></head><body><div id=netStatus style="position:fixed;z-index:999999;left:10px;right:10px;top:8px;padding:8px 12px;border-radius:12px;text-align:center;font-weight:800;font-size:13px;display:none"></div><div class=app><header><div class=brandline>"""+logo_header+"""<div class=logo>{{nome}}</div></div><div class=sub>{{slogan}}</div></header><main>"""+body+"""</main></div><script>
-if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{})}
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js",{updateViaCache:"none"}).catch(()=>{})}
 function getOfflineQueue(){try{return JSON.parse(localStorage.getItem("getres_offline_sales")||"[]")}catch(e){return []}}
 function setOfflineQueue(q){localStorage.setItem("getres_offline_sales",JSON.stringify(q))}
 function getOfflineHistory(){try{return JSON.parse(localStorage.getItem("getres_offline_history")||"[]")}catch(e){return []}}
@@ -352,7 +359,17 @@ async function syncOfflineSales(){
 }
 window.addEventListener("online",()=>{showNetStatus();syncOfflineProducts();syncOfflineSales()});
 window.addEventListener("offline",showNetStatus);
-document.addEventListener("DOMContentLoaded",()=>{showNetStatus();refreshOfflineCatalog();syncOfflineProducts();syncOfflineSales()});
+document.addEventListener("DOMContentLoaded",()=>{
+  showNetStatus();
+  if(!navigator.onLine)return;
+  const agora=Date.now(), ultimo=Number(localStorage.getItem("getres_last_sync")||0);
+  if(agora-ultimo>30000){
+    localStorage.setItem("getres_last_sync",String(agora));
+    refreshOfflineCatalog();
+    syncOfflineProducts();
+    syncOfflineSales();
+  }
+});
 </script></body></html>""",title=title,nome=C["nome"],slogan=C["slogan"])
 
 @app.route("/")
@@ -391,10 +408,17 @@ try{{document.getElementById('homeBadge').textContent=JSON.parse(localStorage.g3
 
 @app.route("/destaques")
 def destaques():
-    c=db(); rows=c.execute("SELECT * FROM produtos WHERE COALESCE(ativo,1)=1 ORDER BY id DESC").fetchall(); c.close()
+    c=db(); rows=c.execute("""SELECT p.*,
+        COALESCE(NULLIF(p.imagem,''),(
+            SELECT f.arquivo FROM fotos f
+            WHERE f.produto_id=p.id AND f.dados IS NOT NULL AND octet_length(f.dados)>0
+            ORDER BY f.principal DESC,f.id DESC LIMIT 1
+        )) AS imagem_efetiva
+        FROM produtos p WHERE COALESCE(p.ativo,1)=1 ORDER BY p.id DESC""").fetchall(); c.close()
     cards=""
     for r in rows:
-        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/foto-arquivo/"+r["imagem"]+"' alt='Ver fotos'></a>") if r["imagem"] else "<div class=pic>👕</div>"
+        img_nome=r.get("imagem_efetiva") or r.get("imagem") or ""
+        foto=("<a href='/galeria/"+str(r["id"])+"'><img src='/foto-arquivo/"+img_nome+"' alt='Ver fotos'></a>") if img_nome else "<div class=pic>👕</div>"
         cards+=f"""<div class=card>{foto}<div class=pad><b>{r['nome']}</b><div class=muted>{r['tamanho']} • {r['estado']} • estoque {r['estoque']}</div><div class=price>R$ {r['preco']:.2f}</div><button onclick="let c=JSON.parse(localStorage.g3cart||'[]');c.push({r['id']});localStorage.g3cart=JSON.stringify(c);alert('Adicionado ao carrinho')">+ Carrinho</button><br><a class='btn ver-fotos' href='/galeria/{r['id']}'>📸 VER TODAS AS FOTOS</a></div></div>"""
     if not cards: cards="<div id='destaquesVazio' class=box>Nenhuma blusa cadastrada. Vá em Produtos → + Novo.</div>"
     offline_js=r"""
@@ -460,12 +484,19 @@ def destaques():
 
 @app.route("/produtos")
 def produtos():
-    c=db(); rows=c.execute("SELECT * FROM produtos ORDER BY id DESC").fetchall(); c.close()
+    c=db(); rows=c.execute("""SELECT p.*,
+        COALESCE(NULLIF(p.imagem,''),(
+            SELECT f.arquivo FROM fotos f
+            WHERE f.produto_id=p.id AND f.dados IS NOT NULL AND octet_length(f.dados)>0
+            ORDER BY f.principal DESC,f.id DESC LIMIT 1
+        )) AS imagem_efetiva
+        FROM produtos p ORDER BY p.id DESC""").fetchall(); c.close()
     x="<div class=row><h2>Produtos</h2><a class=btn href='/novo'>＋ ADICIONAR</a></div>"
     if not rows:
         x+="<div class=box>Nenhuma blusa cadastrada.</div>"
     for r in rows:
-        foto=f"<img class=prod-thumb src='/foto-arquivo/{r['imagem']}'>" if r["imagem"] else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
+        img_nome=r.get("imagem_efetiva") or r.get("imagem") or ""
+        foto=f"<img class=prod-thumb src='/foto-arquivo/{img_nome}'>" if img_nome else "<div class='prod-thumb pic' style='font-size:36px'>👕</div>"
         x+=f"""<div class=box>
         <div class=prod-info>{foto}<div><b style='font-size:29px;line-height:1.2;font-weight:900'>{r['nome']}</b><div class=muted>{r['time_nome']} • {r['tamanho']}</div><div class=price>R$ {r['preco']:.2f}</div><div class=muted>Estoque: {r['estoque']}</div></div></div>
         <div class=prod-actions>
@@ -1216,7 +1247,7 @@ def manifest():
 def service_worker():
     from flask import Response
     js=r"""
-const CACHE='getres-final-v14-impressao-multimodo';
+const CACHE='getres-final-v15-performance-fotos';
 const ROUTES=[
   '/?menu=1',
   '/destaques',
